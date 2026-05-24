@@ -38,11 +38,29 @@ type BackboardMessageRequest = {
   content: string
   json_output: boolean
   llm_provider?: string
-  memory: 'Auto' | 'off'
+  memory: 'Auto' | 'Readonly' | 'off'
   metadata: Record<string, unknown>
   model_name?: string
   stream: false
   web_search: 'off'
+}
+
+type BackboardMemorySearchResponse = {
+  data?: unknown
+  memories?: unknown
+  results?: unknown
+}
+
+type BackboardMemoryHitRaw = {
+  category?: unknown
+  content?: unknown
+  id?: unknown
+  memory_id?: unknown
+  memory?: unknown
+  metadata?: unknown
+  score?: unknown
+  text?: unknown
+  title?: unknown
 }
 
 export type ChunkFinding = {
@@ -97,6 +115,37 @@ export type SavedMemoryInput = {
 
 type LessonReductionResponse = {
   lessons?: unknown
+}
+
+export type PreflightMemoryInput = {
+  category?: string
+  content: string
+  id: string
+  metadata?: Record<string, unknown>
+  score?: number
+  source: 'backboard' | 'local'
+  title?: string
+}
+
+export type PreflightRiskPattern = {
+  explanation: string
+  matchedMemoryIds: string[]
+  severity: 'low' | 'medium' | 'high'
+  title: string
+}
+
+export type PreflightResult = {
+  agentRules: string[]
+  agentsMd: string
+  recommendedMvp: {
+    defer: string[]
+    firstVerticalSlice: string
+    goal: string
+    mustHave: string[]
+  }
+  riskPatterns: PreflightRiskPattern[]
+  starterPrompt: string
+  summary: string
 }
 
 export async function createBackboardAssistant(
@@ -218,6 +267,83 @@ export async function reduceFindingsWithBackboard(
 
   const message = (await response.json()) as BackboardMessageResponse
   return parseLessonReduction(message.content)
+}
+
+export async function searchBackboardMemories(
+  env: Env,
+  assistantId: string,
+  query: string,
+  limit = 5,
+): Promise<PreflightMemoryInput[]> {
+  const apiKey = getRequiredEnv(env, 'BACKBOARD_API_KEY')
+  const baseUrl = (env.BACKBOARD_BASE_URL || 'https://app.backboard.io/api')
+    .replace(/\/$/, '')
+
+  const response = await fetch(
+    `${baseUrl}/assistants/${encodeURIComponent(assistantId)}/memories/search`,
+    {
+      body: JSON.stringify({
+        limit,
+        query,
+      }),
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': apiKey,
+      },
+      method: 'POST',
+    },
+  )
+
+  if (!response.ok) {
+    const message = await response.text()
+    throw new ApiError(
+      502,
+      'server_error',
+      `Backboard memory search failed: ${message}`,
+    )
+  }
+
+  const data = (await response.json()) as BackboardMemorySearchResponse
+  return normalizeMemoryHits(data)
+}
+
+export async function generatePreflightWithBackboard(
+  env: Env,
+  assistantId: string,
+  projectIdea: string,
+  memories: PreflightMemoryInput[],
+): Promise<PreflightResult> {
+  const apiKey = getRequiredEnv(env, 'BACKBOARD_API_KEY')
+  const baseUrl = (env.BACKBOARD_BASE_URL || 'https://app.backboard.io/api')
+    .replace(/\/$/, '')
+
+  const response = await fetch(`${baseUrl}/threads/messages`, {
+    body: JSON.stringify(withModelConfig(env, {
+      assistant_id: assistantId,
+      content: preflightPrompt(projectIdea, memories),
+      json_output: true,
+      memory: 'Readonly',
+      metadata: {
+        memoryCount: memories.length,
+        source: 'never_again_preflight',
+      },
+      stream: false,
+      web_search: 'off',
+    })),
+    headers: {
+      'Content-Type': 'application/json',
+      'X-API-Key': apiKey,
+    },
+    method: 'POST',
+  })
+
+  if (!response.ok) {
+    const message = await response.text()
+    throw new Error(`Backboard preflight failed: ${message}`)
+  }
+
+  const message = (await response.json()) as BackboardMessageResponse
+  return parsePreflightResult(message.content)
 }
 
 export async function addBackboardMemory(
@@ -395,6 +521,60 @@ ${memoryContent(input)}
 `.trim()
 }
 
+function preflightPrompt(
+  projectIdea: string,
+  memories: PreflightMemoryInput[],
+): string {
+  return `
+You are running a Never Again preflight for a new AI coding project.
+
+The builder wants to avoid repeating lessons from previous vibecoded projects.
+
+New project idea:
+${projectIdea}
+
+Retrieved durable builder memories:
+${JSON.stringify(memories, null, 2)}
+
+Task:
+- Use the retrieved memories as the primary evidence.
+- Warn about likely failure patterns before implementation starts.
+- Keep advice transferable and practical, not generic encouragement.
+- Prefer scope control, validation workflow, agent-control rules, architecture sequencing, and deployment/testing risks.
+- The recommended MVP must be a small vertical slice that can be demoed in a hackathon.
+- agentRules should be commands the builder can give a coding agent during the build.
+- starterPrompt should be ready to paste into a coding agent.
+- agentsMd should be a short AGENTS.md starter that encodes the most important project rules.
+- Do not save or mutate memory during this preflight.
+
+Return only strict JSON. Do not wrap it in markdown code fences.
+
+JSON shape:
+{
+  "summary": "short preflight summary",
+  "riskPatterns": [
+    {
+      "title": "risk title",
+      "severity": "low | medium | high",
+      "matchedMemoryIds": ["memory id from retrieved memories"],
+      "explanation": "why this risk matters for this idea"
+    }
+  ],
+  "recommendedMvp": {
+    "goal": "one sentence MVP goal",
+    "mustHave": ["small required capability"],
+    "defer": ["tempting capability to postpone"],
+    "firstVerticalSlice": "first shippable slice"
+  },
+  "agentRules": ["clear instruction for the coding agent"],
+  "starterPrompt": "paste-ready project kickoff prompt",
+  "agentsMd": "short AGENTS.md content"
+}
+
+If no retrieved memory strongly matches, still produce a cautious brief and say which assumptions are weak.
+`.trim()
+}
+
 function parseMemoryResponse(responseText: string): BackboardMemoryResponse {
   if (!responseText.trim()) return {}
 
@@ -535,6 +715,11 @@ function parseLessonReduction(content: string): LessonDraft[] {
   return normalizeLessons(parsed.lessons)
 }
 
+function parsePreflightResult(content: string): PreflightResult {
+  const parsed = JSON.parse(extractJsonPayload(content)) as Partial<PreflightResult>
+  return normalizePreflightResult(parsed)
+}
+
 function extractJsonPayload(content: string): string {
   const trimmed = content.trim()
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)
@@ -551,6 +736,126 @@ function extractJsonPayload(content: string): string {
   }
 
   return trimmed
+}
+
+function normalizePreflightResult(value: Partial<PreflightResult>): PreflightResult {
+  const recommendedMvp = normalizeRecommendedMvp(value.recommendedMvp)
+
+  return {
+    agentRules: normalizeStringArray(value.agentRules),
+    agentsMd: normalizeText(value.agentsMd),
+    recommendedMvp,
+    riskPatterns: normalizeRiskPatterns(value.riskPatterns),
+    starterPrompt: normalizeText(value.starterPrompt),
+    summary: normalizeText(value.summary),
+  }
+}
+
+function normalizeRecommendedMvp(value: unknown): PreflightResult['recommendedMvp'] {
+  if (!value || typeof value !== 'object') {
+    return {
+      defer: [],
+      firstVerticalSlice: '',
+      goal: '',
+      mustHave: [],
+    }
+  }
+
+  const mvp = value as Partial<PreflightResult['recommendedMvp']>
+
+  return {
+    defer: normalizeStringArray(mvp.defer),
+    firstVerticalSlice: normalizeText(mvp.firstVerticalSlice),
+    goal: normalizeText(mvp.goal),
+    mustHave: normalizeStringArray(mvp.mustHave),
+  }
+}
+
+function normalizeRiskPatterns(value: unknown): PreflightRiskPattern[] {
+  if (!Array.isArray(value)) return []
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null
+
+      const risk = item as Partial<PreflightRiskPattern>
+
+      return {
+        explanation: normalizeText(risk.explanation),
+        matchedMemoryIds: normalizeStringArray(risk.matchedMemoryIds),
+        severity: normalizeSeverity(risk.severity),
+        title: normalizeText(risk.title),
+      }
+    })
+    .filter((risk): risk is PreflightRiskPattern => {
+      if (!risk) return false
+      return Boolean(risk.title && risk.explanation)
+    })
+}
+
+function normalizeMemoryHits(value: unknown): PreflightMemoryInput[] {
+  const hits = extractMemoryHits(value)
+
+  return hits
+    .map((hit): PreflightMemoryInput | null => {
+      if (!hit || typeof hit !== 'object') return null
+
+      const raw = hit as BackboardMemoryHitRaw
+      const metadata = normalizeRecord(raw.metadata)
+      const nestedMemory =
+        raw.memory && typeof raw.memory === 'object'
+          ? (raw.memory as BackboardMemoryHitRaw)
+          : null
+      const nestedMetadata = normalizeRecord(nestedMemory?.metadata)
+      const content =
+        normalizeText(raw.content) ||
+        normalizeText(raw.text) ||
+        normalizeText(nestedMemory?.content) ||
+        normalizeText(nestedMemory?.text)
+
+      if (!content) return null
+
+      return {
+        category:
+          normalizeText(raw.category) ||
+          normalizeText(metadata.category) ||
+          normalizeText(nestedMetadata.category) ||
+          undefined,
+        content,
+        id:
+          normalizeText(raw.id) ||
+          normalizeText(raw.memory_id) ||
+          normalizeText(nestedMemory?.id) ||
+          normalizeText(nestedMemory?.memory_id) ||
+          crypto.randomUUID(),
+        metadata: {
+          ...nestedMetadata,
+          ...metadata,
+        },
+        score: normalizeOptionalNumber(raw.score),
+        source: 'backboard',
+        title:
+          normalizeText(raw.title) ||
+          normalizeText(metadata.title) ||
+          normalizeText(nestedMemory?.title) ||
+          undefined,
+      }
+    })
+    .filter((memory): memory is PreflightMemoryInput => Boolean(memory))
+}
+
+function extractMemoryHits(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value
+
+  if (!value || typeof value !== 'object') return []
+
+  const response = value as BackboardMemorySearchResponse
+
+  if (Array.isArray(response.memories)) return response.memories
+  if (Array.isArray(response.data)) return response.data
+  if (Array.isArray(response.results)) return response.results
+
+  return []
 }
 
 function normalizeLessons(value: unknown): LessonDraft[] {
@@ -624,6 +929,35 @@ function normalizeConfidence(value: unknown): number {
   if (typeof value !== 'number' || Number.isNaN(value)) return 0.5
   if (value > 1) return Math.min(1, value / 100)
   return Math.max(0, Math.min(1, value))
+}
+
+function normalizeSeverity(value: unknown): PreflightRiskPattern['severity'] {
+  if (value === 'low' || value === 'medium' || value === 'high') return value
+  return 'medium'
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+
+  return value
+    .map((item) => normalizeText(item))
+    .filter((item) => item.length > 0)
+}
+
+function normalizeOptionalNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && !Number.isNaN(value)) return value
+
+  if (typeof value === 'string') {
+    const parsed = Number(value)
+    if (!Number.isNaN(parsed)) return parsed
+  }
+
+  return undefined
+}
+
+function normalizeRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  return value as Record<string, unknown>
 }
 
 function normalizeText(value: unknown): string {

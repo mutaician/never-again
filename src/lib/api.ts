@@ -90,6 +90,47 @@ export type CreateManualLessonInput = UpdateLessonInput & {
   projectName?: string
 }
 
+export type PreflightMemory = {
+  category?: string
+  content: string
+  id: string
+  metadata?: Record<string, unknown>
+  score?: number
+  source: 'backboard' | 'local'
+  title?: string
+}
+
+export type PreflightRiskPattern = {
+  explanation: string
+  matchedMemoryIds: string[]
+  severity: 'low' | 'medium' | 'high'
+  title: string
+}
+
+export type PreflightResult = {
+  agentRules: string[]
+  agentsMd: string
+  recommendedMvp: {
+    defer: string[]
+    firstVerticalSlice: string
+    goal: string
+    mustHave: string[]
+  }
+  riskPatterns: PreflightRiskPattern[]
+  starterPrompt: string
+  summary: string
+}
+
+export type CreatePreflightResult = {
+  memories: PreflightMemory[]
+  preflight: {
+    created_at: string
+    id: string
+    project_idea: string
+  }
+  result: PreflightResult
+}
+
 type MeResponse = {
   assistant: {
     created: boolean
@@ -215,6 +256,16 @@ export async function rejectLesson(
     { method: 'POST' },
   )
   return data.lesson
+}
+
+export async function createPreflight(
+  accessToken: string,
+  projectIdea: string,
+): Promise<CreatePreflightResult> {
+  return apiRequest<CreatePreflightResult>(accessToken, '/api/preflights', {
+    body: JSON.stringify({ projectIdea }),
+    method: 'POST',
+  })
 }
 
 async function apiRequest<T>(

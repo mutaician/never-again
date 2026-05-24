@@ -4,6 +4,7 @@ import './App.css'
 import {
   approveLesson as approveLessonRequest,
   createManualLesson as createManualLessonRequest,
+  createPreflight as createPreflightRequest,
   createTranscriptImport,
   fetchImportJob,
   fetchLessons as fetchLessonsRequest,
@@ -13,10 +14,13 @@ import {
   updateLesson as updateLessonRequest,
   type ApiSession,
   type CreateManualLessonInput,
+  type CreatePreflightResult,
   type CreateImportInput,
   type CreateImportResult,
   type ImportJob as ApiImportJob,
   type Lesson as ApiLesson,
+  type PreflightMemory,
+  type PreflightResult,
   type UpdateLessonInput,
 } from './lib/api'
 
@@ -34,6 +38,7 @@ type WorkspaceProps = AppProps & {
 type ApiActions = {
   approveLesson: (lessonId: string) => Promise<Lesson>
   createManualLesson: (input: CreateManualLessonInput) => Promise<Lesson>
+  createPreflight: (projectIdea: string) => Promise<CreatePreflightResult>
   createImport: (input: CreateImportInput) => Promise<CreateImportResult>
   fetchJob: (jobId: string) => Promise<ApiImportJob>
   fetchLessons: (status?: string) => Promise<Lesson[]>
@@ -131,6 +136,10 @@ function AuthenticatedWorkspace() {
         const token = await getAccessTokenSilently()
         const row = await createManualLessonRequest(token, input)
         return toLesson(row)
+      },
+      createPreflight: async (projectIdea) => {
+        const token = await getAccessTokenSilently()
+        return createPreflightRequest(token, projectIdea)
       },
       createImport: async (input) => {
         const token = await getAccessTokenSilently()
@@ -757,7 +766,9 @@ function renderView(
       />
     )
   }
-  if (activeView === 'preflight') return <PreflightView />
+  if (activeView === 'preflight') {
+    return <PreflightView apiActions={apiActions} memories={memories} />
+  }
   return <DashboardView lessons={lessons} memories={memories} />
 }
 
@@ -1362,42 +1373,383 @@ function MemoryView({
   )
 }
 
-function PreflightView() {
+function PreflightView({
+  apiActions,
+  memories,
+}: {
+  apiActions: ApiActions | null
+  memories: Lesson[]
+}) {
+  const [projectIdea, setProjectIdea] = useState('')
+  const [preflightState, setPreflightState] = useState<{
+    memories: PreflightMemory[]
+    message: string | null
+    preflightId: string | null
+    result: PreflightResult | null
+    status: 'idle' | 'loading' | 'ready' | 'error'
+  }>({
+    memories: [],
+    message: null,
+    preflightId: null,
+    result: null,
+    status: 'idle',
+  })
+
+  async function submitPreflight(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    if (!apiActions) {
+      setPreflightState((current) => ({
+        ...current,
+        message: 'API is not connected. Check VITE_AUTH0_AUDIENCE and VITE_API_BASE_URL.',
+        status: 'error',
+      }))
+      return
+    }
+
+    if (!projectIdea.trim()) {
+      setPreflightState((current) => ({
+        ...current,
+        message: 'Describe the next project before running preflight.',
+        status: 'error',
+      }))
+      return
+    }
+
+    setPreflightState({
+      memories: [],
+      message: 'Searching saved memory and generating a readonly preflight brief.',
+      preflightId: null,
+      result: null,
+      status: 'loading',
+    })
+
+    try {
+      const run = await apiActions.createPreflight(projectIdea)
+
+      setPreflightState({
+        memories: run.memories,
+        message: `Preflight ${run.preflight.id.slice(0, 8)} created from ${run.memories.length} memory matches.`,
+        preflightId: run.preflight.id,
+        result: run.result,
+        status: 'ready',
+      })
+    } catch (preflightError) {
+      setPreflightState((current) => ({
+        ...current,
+        message:
+          preflightError instanceof Error
+            ? preflightError.message
+            : 'Unable to run preflight.',
+        status: 'error',
+      }))
+    }
+  }
+
   return (
     <div className="screen-grid">
-      <section className="panel">
+      <form className="panel preflight-form" onSubmit={submitPreflight}>
         <div className="section-heading">
           <div>
             <p className="eyebrow">New project preflight</p>
             <h2>Check a fresh idea against builder memory</h2>
+            <p className="microcopy">
+              Use this before giving an agent the build. It searches your saved rules,
+              then asks the Backboard assistant for a readonly risk brief.
+            </p>
           </div>
-          <span className="status-pill is-danger">High scope risk</span>
+          <span className={preflightStatusClass(preflightState.status)}>
+            {preflightStatusLabel(preflightState.status)}
+          </span>
         </div>
         <label className="transcript-box">
           <span>Project idea</span>
-          <textarea defaultValue="A realistic browser-based mission simulator where users experience launch, orbit, lunar flyby, and re-entry." />
+          <textarea
+            onChange={(event) => setProjectIdea(event.target.value)}
+            placeholder="Describe what you want to build next, the deadline, the demo target, and any risky features you are tempted to include."
+            value={projectIdea}
+          />
         </label>
+        <div className="form-footer">
+          <span>{memories.length} saved memories available locally</span>
+          <span>Backboard memory readonly</span>
+          <button
+            className="primary-action"
+            disabled={preflightState.status === 'loading'}
+            type="submit"
+          >
+            {preflightState.status === 'loading' ? 'Running' : 'Run preflight'}
+          </button>
+        </div>
+        {preflightState.message && (
+          <p
+            className={
+              preflightState.status === 'error'
+                ? 'form-message is-error'
+                : 'form-message'
+            }
+          >
+            {preflightState.message}
+          </p>
+        )}
+      </form>
+
+      {preflightState.result ? (
+        <PreflightResultView
+          memories={preflightState.memories}
+          preflightId={preflightState.preflightId}
+          result={preflightState.result}
+        />
+      ) : (
+        <section className="panel preflight-empty">
+          <div>
+            <p className="eyebrow">Expected output</p>
+            <h2>Scope risks, MVP shape, and agent guardrails</h2>
+          </div>
+          <div className="preflight-preview-grid">
+            <span>Matched memories</span>
+            <span>Risk patterns</span>
+            <span>Smallest vertical slice</span>
+            <span>Starter prompt</span>
+          </div>
+          <p className="microcopy">
+            Save at least a few strong memories first for sharper warnings. Manual
+            lessons count too.
+          </p>
+        </section>
+      )}
+    </div>
+  )
+}
+
+function PreflightResultView({
+  memories,
+  preflightId,
+  result,
+}: {
+  memories: PreflightMemory[]
+  preflightId: string | null
+  result: PreflightResult
+}) {
+  return (
+    <>
+      <section className="panel preflight-brief">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Generated brief</p>
+            <h2>{result.summary || 'Preflight complete'}</h2>
+          </div>
+          {preflightId && <code>{preflightId}</code>}
+        </div>
+
+        <div className="preflight-result-grid">
+          <div className="brief-block mvp-block">
+            <p className="eyebrow">Recommended MVP</p>
+            <h3>{result.recommendedMvp.goal || 'No MVP goal returned'}</h3>
+            <p>{result.recommendedMvp.firstVerticalSlice}</p>
+          </div>
+          <div className="brief-block">
+            <p className="eyebrow">Must have</p>
+            <TextList emptyMessage="No must-have list returned." items={result.recommendedMvp.mustHave} />
+          </div>
+          <div className="brief-block">
+            <p className="eyebrow">Defer</p>
+            <TextList emptyMessage="No defer list returned." items={result.recommendedMvp.defer} />
+          </div>
+        </div>
       </section>
 
       <section className="panel">
-        <p className="eyebrow">Generated brief</p>
-        <div className="brief-block">
-          <h2>Recommended MVP</h2>
-          <p>
-            Build one launch sequence with a cockpit view, one interactive
-            control, and one completion state before adding orbit or re-entry.
-          </p>
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Risk patterns</p>
+            <h2>Warnings from previous builds</h2>
+          </div>
+          <span className="status-pill is-warn">
+            {result.riskPatterns.length} risks
+          </span>
         </div>
+        {result.riskPatterns.length === 0 ? (
+          <div className="empty-state">
+            <strong>No risk patterns returned.</strong>
+          </div>
+        ) : (
+          <div className="risk-list">
+            {result.riskPatterns.map((risk) => (
+              <article className="risk-card" key={`${risk.title}-${risk.severity}`}>
+                <div className="lesson-topline">
+                  <span className={severityClass(risk.severity)}>
+                    {risk.severity}
+                  </span>
+                  <span>{risk.matchedMemoryIds.length} memory links</span>
+                </div>
+                <h3>{risk.title}</h3>
+                <p>{risk.explanation}</p>
+                {risk.matchedMemoryIds.length > 0 && (
+                  <div className="memory-id-list">
+                    {risk.matchedMemoryIds.map((id) => (
+                      <code key={id}>{id}</code>
+                    ))}
+                  </div>
+                )}
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="panel prompt-grid">
         <div className="brief-block">
-          <h2>Agent rules</h2>
-          <p>
-            Keep changes scoped. Preserve working UI. Ask for confirmation
-            before adding physics, assets, or mission phases.
-          </p>
+          <div className="copy-heading">
+            <p className="eyebrow">Agent rules</p>
+            <CopyButton
+              label="Copy rules"
+              value={formatAgentRulesForCopy(result.agentRules)}
+            />
+          </div>
+          <TextList emptyMessage="No agent rules returned." items={result.agentRules} />
+        </div>
+        <div className="brief-block prompt-block">
+          <div className="copy-heading">
+            <p className="eyebrow">Starter prompt</p>
+            <CopyButton
+              label="Copy prompt"
+              value={result.starterPrompt || 'No starter prompt returned.'}
+            />
+          </div>
+          <pre>{result.starterPrompt || 'No starter prompt returned.'}</pre>
+        </div>
+        <div className="brief-block prompt-block">
+          <div className="copy-heading">
+            <p className="eyebrow">AGENTS.md seed</p>
+            <CopyButton
+              label="Copy AGENTS.md"
+              value={result.agentsMd || 'No AGENTS.md content returned.'}
+            />
+          </div>
+          <pre>{result.agentsMd || 'No AGENTS.md content returned.'}</pre>
         </div>
       </section>
-    </div>
+
+      <section className="panel">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Memory matches</p>
+            <h2>What the brief was grounded on</h2>
+          </div>
+          <span className="status-pill is-good">{memories.length} matches</span>
+        </div>
+        {memories.length === 0 ? (
+          <div className="empty-state">
+            <strong>No saved memory was retrieved for this idea.</strong>
+          </div>
+        ) : (
+          <div className="memory-match-list">
+            {memories.map((memory) => (
+              <article className="memory-match-card" key={memory.id}>
+                <div className="lesson-topline">
+                  <span className="category">
+                    {memory.category ? formatCategory(memory.category) : 'Memory'}
+                  </span>
+                  <span>{memory.source}</span>
+                </div>
+                <h3>{memory.title || memory.id}</h3>
+                <p>{truncateText(memory.content, 420)}</p>
+                <code>{memory.id}</code>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+    </>
   )
+}
+
+function TextList({
+  emptyMessage,
+  items,
+}: {
+  emptyMessage: string
+  items: string[]
+}) {
+  if (items.length === 0) {
+    return <p>{emptyMessage}</p>
+  }
+
+  return (
+    <ul className="tight-list">
+      {items.map((item) => (
+        <li key={item}>{item}</li>
+      ))}
+    </ul>
+  )
+}
+
+function CopyButton({
+  label,
+  value,
+}: {
+  label: string
+  value: string
+}) {
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
+
+  async function copyValue() {
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopyState('copied')
+      window.setTimeout(() => setCopyState('idle'), 1600)
+    } catch {
+      setCopyState('error')
+      window.setTimeout(() => setCopyState('idle'), 2200)
+    }
+  }
+
+  return (
+    <button
+      className={copyState === 'error' ? 'copy-action is-error' : 'copy-action'}
+      disabled={!value.trim()}
+      onClick={() => {
+        void copyValue()
+      }}
+      type="button"
+    >
+      {copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : label}
+    </button>
+  )
+}
+
+function formatAgentRulesForCopy(rules: string[]): string {
+  if (rules.length === 0) return 'No agent rules returned.'
+
+  return rules.map((rule, index) => `${index + 1}. ${rule}`).join('\n')
+}
+
+function preflightStatusClass(
+  status: 'idle' | 'loading' | 'ready' | 'error',
+): string {
+  if (status === 'loading') return 'status-pill is-warn'
+  if (status === 'ready') return 'status-pill is-good'
+  if (status === 'error') return 'status-pill is-danger'
+  return 'status-pill is-muted'
+}
+
+function preflightStatusLabel(status: 'idle' | 'loading' | 'ready' | 'error'): string {
+  if (status === 'loading') return 'Running'
+  if (status === 'ready') return 'Brief ready'
+  if (status === 'error') return 'Needs attention'
+  return 'Ready'
+}
+
+function severityClass(severity: 'low' | 'medium' | 'high'): string {
+  if (severity === 'high') return 'status-pill is-danger'
+  if (severity === 'medium') return 'status-pill is-warn'
+  return 'status-pill is-good'
+}
+
+function truncateText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value
+  return `${value.slice(0, maxLength).trim()}...`
 }
 
 function LessonList({

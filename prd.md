@@ -1220,6 +1220,10 @@ Acceptance criteria:
 - Output clearly connects new risk warnings to past lessons.
 - User can use the generated brief to start a coding agent.
 
+Implementation note:
+
+- The current preflight path grounds the brief with saved D1 lessons first, opportunistically adds Backboard memory-search matches, generates with Backboard memory in readonly mode, and stores the run in D1.
+
 ### Phase 12: Demo Polish
 
 1. Create a demo transcript based on the Artemis II simulator story.

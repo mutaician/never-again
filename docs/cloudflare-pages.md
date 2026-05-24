@@ -220,5 +220,12 @@ For reduced lesson drafts:
 pnpm d1:lessons:local
 ```
 
+For saved preflight runs:
+
+```bash
+pnpm d1:preflights:local
+```
+
 New imports should move through `chunked`, `findings_ready`, and then `ready_for_review` after Backboard analyzes the chunks with memory off and reduces findings into draft lessons.
-Do not deploy until `/api/me` reuses the same user row and the import form creates chunk rows, findings, and draft lessons locally.
+Preflight should create one row after you paste a new project idea and click `Run preflight`.
+Do not deploy until `/api/me` reuses the same user row and the import form creates chunk rows, findings, draft lessons, saved memories, and preflight rows locally.

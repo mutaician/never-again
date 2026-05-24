@@ -1,13 +1,17 @@
 import { useAuth0 } from '@auth0/auth0-react'
-import { type FormEvent, useEffect, useMemo, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import './App.css'
 import {
   createTranscriptImport,
+  fetchImportJob,
+  fetchLessonDrafts,
   fetchMe,
   hasApiAudience,
   type ApiSession,
   type CreateImportInput,
   type CreateImportResult,
+  type ImportJob as ApiImportJob,
+  type Lesson as ApiLesson,
 } from './lib/api'
 
 type ViewKey = 'dashboard' | 'import' | 'review' | 'memory' | 'preflight'
@@ -23,15 +27,32 @@ type WorkspaceProps = AppProps & {
 
 type ApiActions = {
   createImport: (input: CreateImportInput) => Promise<CreateImportResult>
+  fetchJob: (jobId: string) => Promise<ApiImportJob>
+  fetchLessons: () => Promise<Lesson[]>
 }
 
 type Lesson = {
+  id: string
   title: string
   category: string
   confidence: number
   evidence: string
   rule: string
-  status: 'Draft' | 'Saved'
+  status: string
+}
+
+type LessonState = {
+  lessons: Lesson[]
+  message: string | null
+  status: 'idle' | 'loading' | 'ready' | 'error'
+}
+
+type ProcessingState = {
+  importId: string | null
+  job: ApiImportJob | null
+  message: string | null
+  projectName: string | null
+  status: 'idle' | 'polling' | 'ready' | 'error'
 }
 
 const navItems: Array<{ id: ViewKey; label: string; shortcut: string }> = [
@@ -42,36 +63,39 @@ const navItems: Array<{ id: ViewKey; label: string; shortcut: string }> = [
   { id: 'preflight', label: 'Preflight', shortcut: '05' },
 ]
 
-const lessons: Lesson[] = [
+const previewLessons: Lesson[] = [
   {
+    id: 'preview-scope',
     title: 'Start simulation ideas with one playable slice',
-    category: 'Scope',
+    category: 'scope',
     confidence: 91,
     evidence:
       'The Artemis project expanded across physics, camera systems, assets, mission sequence, and realism before one interaction was proven.',
     rule:
       'For game-like projects, validate one scene, one control mode, and one success condition first.',
-    status: 'Draft',
+    status: 'draft',
   },
   {
+    id: 'preview-domain',
     title: 'Challenge hidden domain complexity before coding',
-    category: 'Domain',
+    category: 'domain_knowledge',
     confidence: 86,
     evidence:
       'The build depended on game development concepts that were discovered only after implementation began.',
     rule:
       'Before coding an unfamiliar domain, ask the agent for a complexity map and a reduced vertical slice.',
-    status: 'Draft',
+    status: 'draft',
   },
   {
+    id: 'preview-agent-behavior',
     title: 'Stop agents from rewriting working surfaces',
-    category: 'Agent behavior',
+    category: 'agent_behavior',
     confidence: 82,
     evidence:
       'Several fixes introduced regressions because the agent changed nearby behavior while chasing a single bug.',
     rule:
       'Constrain repair prompts to the failing module, require a diff summary, and test before broad edits.',
-    status: 'Saved',
+    status: 'saved',
   },
 ]
 
@@ -115,6 +139,25 @@ function AuthenticatedWorkspace() {
     status: 'loading',
     user: null,
   })
+  const apiActions = useMemo<ApiActions | null>(() => {
+    if (!hasApiAudience) return null
+
+    return {
+      createImport: async (input) => {
+        const token = await getAccessTokenSilently()
+        return createTranscriptImport(token, input)
+      },
+      fetchJob: async (jobId) => {
+        const token = await getAccessTokenSilently()
+        return fetchImportJob(token, jobId)
+      },
+      fetchLessons: async () => {
+        const token = await getAccessTokenSilently()
+        const rows = await fetchLessonDrafts(token)
+        return rows.map(toLesson)
+      },
+    }
+  }, [getAccessTokenSilently])
 
   useEffect(() => {
     if (!isAuthenticated || !hasApiAudience) return
@@ -178,16 +221,7 @@ function AuthenticatedWorkspace() {
 
   return (
     <Workspace
-      apiActions={
-        hasApiAudience
-          ? {
-              createImport: async (input) => {
-                const token = await getAccessTokenSilently()
-                return createTranscriptImport(token, input)
-              },
-            }
-          : null
-      }
+      apiActions={apiActions}
       apiSession={hasApiAudience ? apiSession : apiAudienceMissingSession}
       authEnabled
     />
@@ -196,11 +230,132 @@ function AuthenticatedWorkspace() {
 
 function Workspace({ apiActions, apiSession, authEnabled }: WorkspaceProps) {
   const [activeView, setActiveView] = useState<ViewKey>('dashboard')
+  const [lessonState, setLessonState] = useState<LessonState>({
+    lessons: apiActions ? [] : previewLessons,
+    message: apiActions ? null : 'Preview lessons shown until the API is connected.',
+    status: 'idle',
+  })
+  const [processingState, setProcessingState] = useState<ProcessingState>({
+    importId: null,
+    job: null,
+    message: null,
+    projectName: null,
+    status: 'idle',
+  })
 
+  const displayLessons = apiActions ? lessonState.lessons : previewLessons
+  const activeJobId = processingState.job?.id ?? null
   const savedLessons = useMemo(
-    () => lessons.filter((lesson) => lesson.status === 'Saved').length,
-    [],
+    () => displayLessons.filter((lesson) => isSavedLesson(lesson)).length,
+    [displayLessons],
   )
+  const draftLessons = displayLessons.length - savedLessons
+  const refreshLessons = useCallback(async () => {
+    if (!apiActions) return
+
+    setLessonState((current) => ({
+      ...current,
+      message: 'Loading lesson drafts.',
+      status: 'loading',
+    }))
+
+    try {
+      const freshLessons = await apiActions.fetchLessons()
+
+      setLessonState({
+        lessons: freshLessons,
+        message: null,
+        status: 'ready',
+      })
+    } catch (lessonError) {
+      setLessonState((current) => ({
+        ...current,
+        message:
+          lessonError instanceof Error
+            ? lessonError.message
+            : 'Unable to load lesson drafts.',
+        status: 'error',
+      }))
+    }
+  }, [apiActions])
+
+  useEffect(() => {
+    if (apiSession.status !== 'ready') return
+    void refreshLessons()
+  }, [apiSession.status, refreshLessons])
+
+  const handleImportQueued = useCallback((result: CreateImportResult) => {
+    setActiveView('review')
+    setLessonState({
+      lessons: [],
+      message: 'Analysis has started. Draft lessons will appear here when reduction finishes.',
+      status: 'loading',
+    })
+    setProcessingState({
+      importId: result.import.id,
+      job: result.job,
+      message: 'Import queued. Watching the background analysis job.',
+      projectName: result.project.name,
+      status: 'polling',
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!apiActions || !activeJobId || processingState.status !== 'polling') {
+      return
+    }
+
+    let isActive = true
+    const jobId = activeJobId
+
+    async function pollJob() {
+      if (!apiActions) return
+
+      try {
+        const job = await apiActions.fetchJob(jobId)
+
+        if (!isActive) return
+
+        const nextStatus = jobUiStatus(job)
+
+        setProcessingState((current) => {
+          if (current.job?.id !== job.id) return current
+
+          return {
+            ...current,
+            job,
+            message: jobStatusMessage(job),
+            status: nextStatus,
+          }
+        })
+
+        if (nextStatus === 'ready') {
+          await refreshLessons()
+        }
+      } catch (jobError) {
+        if (!isActive) return
+
+        setProcessingState((current) => ({
+          ...current,
+          message:
+            jobError instanceof Error
+              ? jobError.message
+              : 'Unable to check analysis progress.',
+          status: 'error',
+        }))
+      }
+    }
+
+    void pollJob()
+    const timer = window.setInterval(() => {
+      void pollJob()
+    }, 2500)
+
+    return () => {
+      isActive = false
+      window.clearInterval(timer)
+    }
+  }, [activeJobId, apiActions, processingState.status, refreshLessons])
 
   return (
     <div className="app-shell">
@@ -247,7 +402,9 @@ function Workspace({ apiActions, apiSession, authEnabled }: WorkspaceProps) {
             <h1>Artemis Recovery Postmortem</h1>
           </div>
           <div className="topbar-actions">
-            <span className="status-pill is-good">3 lessons found</span>
+            <span className={processingSummaryClass(processingState)}>
+              {processingSummaryLabel(processingState, displayLessons.length)}
+            </span>
             {authEnabled && <AuthControls apiSession={apiSession} />}
             <button className="primary-action" onClick={() => setActiveView('import')} type="button">
               New import
@@ -256,7 +413,15 @@ function Workspace({ apiActions, apiSession, authEnabled }: WorkspaceProps) {
         </header>
 
         <section className="view-surface">
-          {renderView(activeView, apiActions)}
+          {renderView(
+            activeView,
+            apiActions,
+            lessonState,
+            processingState,
+            handleImportQueued,
+            refreshLessons,
+            displayLessons,
+          )}
         </section>
       </main>
 
@@ -273,7 +438,7 @@ function Workspace({ apiActions, apiSession, authEnabled }: WorkspaceProps) {
         <div className="metric-stack">
           <div>
             <span>Draft lessons</span>
-            <strong>{lessons.length - savedLessons}</strong>
+            <strong>{draftLessons}</strong>
           </div>
           <div>
             <span>Saved memories</span>
@@ -394,15 +559,33 @@ function apiStatusLabel(status: ApiSession['status']): string {
   return 'API skipped'
 }
 
-function renderView(activeView: ViewKey, apiActions: ApiActions | null) {
-  if (activeView === 'import') return <ImportView apiActions={apiActions} />
-  if (activeView === 'review') return <ReviewView />
+function renderView(
+  activeView: ViewKey,
+  apiActions: ApiActions | null,
+  lessonState: LessonState,
+  processingState: ProcessingState,
+  onImportQueued: (result: CreateImportResult) => void,
+  onRefreshLessons: () => Promise<void>,
+  lessons: Lesson[],
+) {
+  if (activeView === 'import') {
+    return <ImportView apiActions={apiActions} onImportQueued={onImportQueued} />
+  }
+  if (activeView === 'review') {
+    return (
+      <ReviewView
+        lessonState={lessonState}
+        onRefresh={onRefreshLessons}
+        processingState={processingState}
+      />
+    )
+  }
   if (activeView === 'memory') return <MemoryView />
   if (activeView === 'preflight') return <PreflightView />
-  return <DashboardView />
+  return <DashboardView lessons={lessons} />
 }
 
-function DashboardView() {
+function DashboardView({ lessons }: { lessons: Lesson[] }) {
   return (
     <div className="screen-grid">
       <section className="panel hero-panel">
@@ -428,7 +611,7 @@ function DashboardView() {
           </div>
           <span className="status-pill is-warn">Manual approval</span>
         </div>
-        <LessonList mode="compact" />
+        <LessonList lessons={lessons} mode="compact" />
       </section>
 
       <section className="panel split-panel">
@@ -450,7 +633,13 @@ function DashboardView() {
   )
 }
 
-function ImportView({ apiActions }: { apiActions: ApiActions | null }) {
+function ImportView({
+  apiActions,
+  onImportQueued,
+}: {
+  apiActions: ApiActions | null
+  onImportQueued: (result: CreateImportResult) => void
+}) {
   const [projectName, setProjectName] = useState('Artemis Recovery Postmortem')
   const [sourcePlatform, setSourcePlatform] = useState('claude-code')
   const [transcript, setTranscript] = useState(
@@ -493,6 +682,7 @@ function ImportView({ apiActions }: { apiActions: ApiActions | null }) {
         message: `Queued ${result.job.id.slice(0, 8)} for ${result.project.name}. Normalized transcript stored with ${result.import.redacted_secret_count} redactions.`,
         tone: 'success',
       })
+      onImportQueued(result)
     } catch (submitError) {
       setImportStatus({
         message:
@@ -587,17 +777,96 @@ function importStatusLabel(tone: 'idle' | 'success' | 'error'): string {
   return 'Ready'
 }
 
-function ReviewView() {
+function ReviewView({
+  lessonState,
+  onRefresh,
+  processingState,
+}: {
+  lessonState: LessonState
+  onRefresh: () => Promise<void>
+  processingState: ProcessingState
+}) {
   return (
-    <section className="panel">
+    <div className="screen-grid">
+      <ProcessingPanel processingState={processingState} />
+      <section className="panel">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Review queue</p>
+            <h2>Lesson drafts from reduction</h2>
+            {lessonState.message && <p className="microcopy">{lessonState.message}</p>}
+          </div>
+          <div className="section-actions">
+            <span className={lessonStatusClass(lessonState.status)}>
+              {lessonState.status === 'loading'
+                ? 'Loading'
+                : `${lessonState.lessons.length} drafts`}
+            </span>
+            <button
+              disabled={lessonState.status === 'loading'}
+              onClick={() => {
+                void onRefresh()
+              }}
+              type="button"
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
+        <LessonList
+          emptyMessage={
+            processingState.status === 'polling'
+              ? 'Analysis is still running. Draft lessons will appear here soon.'
+              : 'No draft lessons yet.'
+          }
+          lessons={lessonState.lessons}
+          mode="review"
+        />
+      </section>
+    </div>
+  )
+}
+
+function ProcessingPanel({
+  processingState,
+}: {
+  processingState: ProcessingState
+}) {
+  if (!processingState.job) return null
+
+  const progress = clampProgress(processingState.job.progress)
+
+  return (
+    <section className="panel processing-panel">
       <div className="section-heading">
         <div>
-          <p className="eyebrow">Review queue</p>
-          <h2>Approve only the lessons worth remembering</h2>
+          <p className="eyebrow">Active analysis</p>
+          <h2>{processingState.projectName || 'Transcript import'}</h2>
+          {processingState.message && (
+            <p className="microcopy">{processingState.message}</p>
+          )}
         </div>
-        <span className="status-pill is-warn">2 drafts</span>
+        <span className={processingStatusClass(processingState.status)}>
+          {formatStatus(processingState.job.status)}
+        </span>
       </div>
-      <LessonList mode="review" />
+      <div
+        aria-label="Analysis progress"
+        aria-valuemax={100}
+        aria-valuemin={0}
+        aria-valuenow={progress}
+        className="progress-track"
+        role="progressbar"
+      >
+        <span style={{ width: `${progress}%` }} />
+      </div>
+      <div className="job-meta">
+        <code>{processingState.job.id}</code>
+        <span>{progress}% complete</span>
+      </div>
+      {processingState.job.error_message && (
+        <p className="form-message is-error">{processingState.job.error_message}</p>
+      )}
     </section>
   )
 }
@@ -668,14 +937,30 @@ function PreflightView() {
   )
 }
 
-function LessonList({ mode }: { mode: 'compact' | 'review' }) {
+function LessonList({
+  emptyMessage = 'No draft lessons yet.',
+  lessons,
+  mode,
+}: {
+  emptyMessage?: string
+  lessons: Lesson[]
+  mode: 'compact' | 'review'
+}) {
+  if (lessons.length === 0) {
+    return (
+      <div className="empty-state">
+        <strong>{emptyMessage}</strong>
+      </div>
+    )
+  }
+
   return (
     <div className="lesson-list">
       {lessons.map((lesson) => (
-        <article className="lesson-item" key={lesson.title}>
+        <article className="lesson-item" key={lesson.id}>
           <div className="lesson-topline">
-            <span className="category">{lesson.category}</span>
-            <span>{lesson.confidence}% confidence</span>
+            <span className="category">{formatCategory(lesson.category)}</span>
+            <span>{formatConfidence(lesson.confidence)}% confidence</span>
           </div>
           <h3>{lesson.title}</h3>
           <p>{lesson.evidence}</p>
@@ -686,22 +971,101 @@ function LessonList({ mode }: { mode: 'compact' | 'review' }) {
             </div>
           )}
           <div className="lesson-actions">
-            <span className={lesson.status === 'Saved' ? 'status-pill is-good' : 'status-pill is-muted'}>
-              {lesson.status}
+            <span className={isSavedLesson(lesson) ? 'status-pill is-good' : 'status-pill is-muted'}>
+              {formatStatus(lesson.status)}
             </span>
-            {mode === 'review' && (
-              <div>
-                <button type="button">Reject</button>
-                <button className="primary-action" type="button">
-                  Approve
-                </button>
-              </div>
-            )}
           </div>
         </article>
       ))}
     </div>
   )
+}
+
+function toLesson(row: ApiLesson): Lesson {
+  return {
+    category: row.category,
+    confidence: row.confidence,
+    evidence: row.evidence,
+    id: row.id,
+    rule: row.future_rule,
+    status: row.status,
+    title: row.title,
+  }
+}
+
+function formatCategory(value: string): string {
+  return value
+    .split('_')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ')
+}
+
+function formatConfidence(value: number): number {
+  if (value <= 1) return Math.round(value * 100)
+  return Math.round(value)
+}
+
+function formatStatus(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
+function isSavedLesson(lesson: Lesson): boolean {
+  return lesson.status === 'saved' || lesson.status === 'approved'
+}
+
+function lessonStatusClass(status: LessonState['status']): string {
+  if (status === 'ready') return 'status-pill is-good'
+  if (status === 'loading') return 'status-pill is-warn'
+  if (status === 'error') return 'status-pill is-danger'
+  return 'status-pill is-muted'
+}
+
+function jobUiStatus(job: ApiImportJob): ProcessingState['status'] {
+  if (job.status === 'failed') return 'error'
+  if (job.status === 'ready_for_review') return 'ready'
+  return 'polling'
+}
+
+function jobStatusMessage(job: ApiImportJob): string {
+  if (job.status === 'queued') return 'Queued. Waiting for the worker to start.'
+  if (job.status === 'chunking') return 'Normalizing and chunking the transcript.'
+  if (job.status === 'ready_for_analysis') return 'Chunks are ready for Backboard analysis.'
+  if (job.status === 'analyzing') return 'Backboard is extracting chunk findings.'
+  if (job.status === 'findings_ready') return 'Findings are ready. Reducing into lesson drafts.'
+  if (job.status === 'reducing') return 'Merging findings into high-quality draft lessons.'
+  if (job.status === 'ready_for_review') return 'Draft lessons are ready for review.'
+  if (job.status === 'failed') return 'Analysis failed. Check the error below.'
+  return `Job status: ${job.status}`
+}
+
+function processingStatusClass(status: ProcessingState['status']): string {
+  if (status === 'ready') return 'status-pill is-good'
+  if (status === 'error') return 'status-pill is-danger'
+  if (status === 'polling') return 'status-pill is-warn'
+  return 'status-pill is-muted'
+}
+
+function processingSummaryClass(processingState: ProcessingState): string {
+  if (processingState.status === 'polling') return 'status-pill is-warn'
+  if (processingState.status === 'error') return 'status-pill is-danger'
+  return 'status-pill is-good'
+}
+
+function processingSummaryLabel(
+  processingState: ProcessingState,
+  lessonCount: number,
+): string {
+  if (processingState.status === 'polling') {
+    return `${clampProgress(processingState.job?.progress || 0)}% processing`
+  }
+
+  if (processingState.status === 'error') return 'Analysis failed'
+  return `${lessonCount} lessons found`
+}
+
+function clampProgress(value: number): number {
+  if (Number.isNaN(value)) return 0
+  return Math.max(0, Math.min(100, Math.round(value)))
 }
 
 export default App

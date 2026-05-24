@@ -35,11 +35,14 @@ AUTH0_DOMAIN=
 AUTH0_AUDIENCE=
 BACKBOARD_API_KEY=
 BACKBOARD_BASE_URL=https://app.backboard.io/api
+BACKBOARD_LLM_PROVIDER=
+BACKBOARD_MODEL_NAME=
 FRONTEND_ORIGIN=https://<your-pages-domain>
 APP_ENV=production
 ```
 
 `AUTH0_AUDIENCE` must match `VITE_AUTH0_AUDIENCE`.
+`BACKBOARD_LLM_PROVIDER` and `BACKBOARD_MODEL_NAME` are optional. If omitted, Backboard uses its default model.
 
 ## Auth0
 
@@ -120,6 +123,8 @@ AUTH0_DOMAIN=
 AUTH0_AUDIENCE=https://api.never-again.app
 BACKBOARD_API_KEY=
 BACKBOARD_BASE_URL=https://app.backboard.io/api
+BACKBOARD_LLM_PROVIDER=
+BACKBOARD_MODEL_NAME=
 FRONTEND_ORIGIN=http://localhost:5173
 APP_ENV=development
 ```
@@ -209,5 +214,11 @@ For chunk findings:
 pnpm d1:findings:local
 ```
 
-New imports should move through `chunked` and then to `findings_ready` after Backboard analyzes the chunks with memory off.
-Do not deploy until `/api/me` reuses the same user row and the import form creates chunk rows and findings locally.
+For reduced lesson drafts:
+
+```bash
+pnpm d1:lessons:local
+```
+
+New imports should move through `chunked`, `findings_ready`, and then `ready_for_review` after Backboard analyzes the chunks with memory off and reduces findings into draft lessons.
+Do not deploy until `/api/me` reuses the same user row and the import form creates chunk rows, findings, and draft lessons locally.

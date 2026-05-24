@@ -1,10 +1,17 @@
-import { analyzeChunkWithBackboard, type ChunkFinding } from './backboard'
+import {
+  analyzeChunkWithBackboard,
+  reduceFindingsWithBackboard,
+  type ChunkFinding,
+  type LessonDraft,
+  type ReducerFinding,
+} from './backboard'
 import { chunkTranscript } from './chunking'
 import type { Env } from './env'
 import { getImport, getJob } from './imports'
 import { getProject } from './projects'
 
 const MAX_CHUNKS_PER_ANALYSIS = 8
+const MAX_FINDINGS_PER_REDUCTION = 80
 
 type ChunkRow = {
   char_count: number
@@ -18,6 +25,18 @@ type ChunkRow = {
   turn_end: number | null
   turn_start: number | null
   updated_at: string
+  user_id: string
+}
+
+type ChunkFindingRow = {
+  category: string
+  chunk_id: string
+  chunk_index: number
+  confidence: number | null
+  created_at: string
+  finding_json: string
+  id: string
+  import_id: string
   user_id: string
 }
 
@@ -203,6 +222,41 @@ export async function analyzeImportChunks(
   }
 }
 
+export async function reduceImportFindings(
+  env: Env,
+  userId: string,
+  importId: string,
+  jobId: string,
+  assistantId: string,
+): Promise<void> {
+  try {
+    const importRecord = await getImport(env, userId, importId)
+    const job = await getJob(env, userId, jobId)
+    const project = await getProject(env, userId, importRecord.project_id)
+    const findings = await listChunkFindings(env, userId, importId)
+
+    await markReductionStarted(env, userId, importId, job.id)
+
+    const reducerFindings = findings
+      .map(toReducerFinding)
+      .filter((finding): finding is ReducerFinding => Boolean(finding))
+      .slice(0, MAX_FINDINGS_PER_REDUCTION)
+
+    const lessons =
+      reducerFindings.length > 0
+        ? await reduceFindingsWithBackboard(env, assistantId, reducerFindings, {
+            projectName: project.name,
+          })
+        : []
+
+    await storeLessonDrafts(env, userId, project.id, importId, lessons)
+    await markReadyForReview(env, userId, importId, job.id)
+  } catch (error) {
+    await markProcessingFailed(env, userId, importId, jobId, error, 'Reduction failed')
+    throw error
+  }
+}
+
 async function markProcessingStarted(
   env: Env,
   userId: string,
@@ -279,6 +333,34 @@ async function markAnalysisStarted(
   ])
 }
 
+async function markReductionStarted(
+  env: Env,
+  userId: string,
+  importId: string,
+  jobId: string,
+): Promise<void> {
+  const now = new Date().toISOString()
+
+  await env.DB!.batch([
+    env.DB!
+      .prepare(
+        `UPDATE imports
+         SET status = 'reducing', updated_at = ?
+         WHERE id = ? AND user_id = ?`,
+      )
+      .bind(now, importId, userId),
+    env.DB!
+      .prepare(
+        `UPDATE jobs
+         SET status = 'reducing',
+             progress = 75,
+             updated_at = ?
+         WHERE id = ? AND user_id = ?`,
+      )
+      .bind(now, jobId, userId),
+  ])
+}
+
 async function markChunkStatus(
   env: Env,
   chunkId: string,
@@ -288,6 +370,26 @@ async function markChunkStatus(
     .prepare('UPDATE chunks SET status = ?, updated_at = ? WHERE id = ?')
     .bind(status, new Date().toISOString(), chunkId)
     .run()
+}
+
+async function listChunkFindings(
+  env: Env,
+  userId: string,
+  importId: string,
+): Promise<ChunkFindingRow[]> {
+  const result = await env.DB!
+    .prepare(
+      `SELECT chunk_findings.*, chunks.chunk_index
+       FROM chunk_findings
+       JOIN chunks ON chunks.id = chunk_findings.chunk_id
+       WHERE chunk_findings.user_id = ?
+         AND chunk_findings.import_id = ?
+       ORDER BY chunks.chunk_index ASC, chunk_findings.created_at ASC`,
+    )
+    .bind(userId, importId)
+    .all<ChunkFindingRow>()
+
+  return result.results
 }
 
 async function storeChunkFindings(
@@ -328,6 +430,134 @@ async function storeChunkFindings(
         ),
     ),
   )
+}
+
+async function storeLessonDrafts(
+  env: Env,
+  userId: string,
+  projectId: string,
+  importId: string,
+  lessons: LessonDraft[],
+): Promise<void> {
+  const now = new Date().toISOString()
+
+  await env.DB!.batch([
+    env.DB!
+      .prepare(
+        `DELETE FROM lessons
+         WHERE user_id = ?
+           AND import_id = ?
+           AND status = 'draft'`,
+      )
+      .bind(userId, importId),
+    ...lessons.map((lesson) =>
+      env.DB!
+        .prepare(
+          `INSERT INTO lessons (
+            id,
+            user_id,
+            project_id,
+            import_id,
+            title,
+            category,
+            problem_pattern,
+            evidence,
+            future_rule,
+            confidence,
+            status,
+            created_at,
+            updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
+        )
+        .bind(
+          crypto.randomUUID(),
+          userId,
+          projectId,
+          importId,
+          lesson.title,
+          lesson.category,
+          lesson.problemPattern,
+          lesson.evidence,
+          lesson.futureRule,
+          lesson.confidence,
+          now,
+          now,
+        ),
+    ),
+  ])
+}
+
+async function markReadyForReview(
+  env: Env,
+  userId: string,
+  importId: string,
+  jobId: string,
+): Promise<void> {
+  const now = new Date().toISOString()
+
+  await env.DB!.batch([
+    env.DB!
+      .prepare(
+        `UPDATE imports
+         SET status = 'ready_for_review', updated_at = ?
+         WHERE id = ? AND user_id = ?`,
+      )
+      .bind(now, importId, userId),
+    env.DB!
+      .prepare(
+        `UPDATE jobs
+         SET status = 'ready_for_review',
+             progress = 85,
+             updated_at = ?
+         WHERE id = ? AND user_id = ?`,
+      )
+      .bind(now, jobId, userId),
+  ])
+}
+
+function toReducerFinding(row: ChunkFindingRow): ReducerFinding | null {
+  try {
+    const finding = JSON.parse(row.finding_json) as Partial<ChunkFinding>
+
+    if (
+      !finding.title ||
+      !finding.problemPattern ||
+      !finding.futureRuleCandidate
+    ) {
+      return null
+    }
+
+    return {
+      category: normalizeFindingCategory(finding.category),
+      confidence: typeof finding.confidence === 'number' ? finding.confidence : 0.5,
+      evidence: typeof finding.evidence === 'string' ? finding.evidence : '',
+      futureRuleCandidate: finding.futureRuleCandidate,
+      problemPattern: finding.problemPattern,
+      sourceChunkIndex: row.chunk_index,
+      title: finding.title,
+    }
+  } catch {
+    return null
+  }
+}
+
+function normalizeFindingCategory(value: unknown): ChunkFinding['category'] {
+  const categories = new Set<ChunkFinding['category']>([
+    'scope',
+    'architecture',
+    'agent_behavior',
+    'prompting',
+    'domain_knowledge',
+    'testing',
+    'ux',
+    'tooling',
+    'deployment',
+    'unknown',
+  ])
+
+  return typeof value === 'string' && categories.has(value as ChunkFinding['category'])
+    ? (value as ChunkFinding['category'])
+    : 'unknown'
 }
 
 async function markProcessingFailed(

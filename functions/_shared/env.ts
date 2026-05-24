@@ -4,6 +4,8 @@ export type Env = {
   AUTH0_DOMAIN?: string
   BACKBOARD_API_KEY?: string
   BACKBOARD_BASE_URL?: string
+  BACKBOARD_LLM_PROVIDER?: string
+  BACKBOARD_MODEL_NAME?: string
   DB?: D1Database
   FRONTEND_ORIGIN?: string
   TRANSCRIPTS_BUCKET?: R2Bucket

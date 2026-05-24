@@ -41,11 +41,29 @@ export type ImportRecord = {
 }
 
 export type ImportJob = {
+  error_message?: string | null
   id: string
   import_id: string
   progress: number
   status: string
   type: string
+}
+
+export type Lesson = {
+  backboard_memory_id: string | null
+  category: string
+  confidence: number
+  created_at: string
+  evidence: string
+  future_rule: string
+  id: string
+  import_id: string | null
+  problem_pattern: string
+  project_id: string
+  project_name: string
+  status: string
+  title: string
+  updated_at: string
 }
 
 export type CreateImportInput = {
@@ -114,6 +132,22 @@ export async function createTranscriptImport(
 export async function fetchProjects(accessToken: string): Promise<Project[]> {
   const data = await apiRequest<{ projects: Project[] }>(accessToken, '/api/projects')
   return data.projects
+}
+
+export async function fetchLessonDrafts(accessToken: string): Promise<Lesson[]> {
+  const data = await apiRequest<{ lessons: Lesson[] }>(
+    accessToken,
+    '/api/lessons?status=draft',
+  )
+  return data.lessons
+}
+
+export async function fetchImportJob(
+  accessToken: string,
+  jobId: string,
+): Promise<ImportJob> {
+  const data = await apiRequest<{ job: ImportJob }>(accessToken, `/api/jobs/${jobId}`)
+  return data.job
 }
 
 async function apiRequest<T>(

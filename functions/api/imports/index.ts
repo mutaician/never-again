@@ -10,6 +10,7 @@ import { createImport } from '../../_shared/imports'
 import {
   analyzeImportChunks,
   processImportIntoChunks,
+  reduceImportFindings,
 } from '../../_shared/processing'
 import { requireRequestSession } from '../../_shared/session'
 
@@ -74,6 +75,7 @@ async function processImportWorkflow(
   if (!assistantId) return
 
   await analyzeImportChunks(env, userId, importId, jobId, assistantId)
+  await reduceImportFindings(env, userId, importId, jobId, assistantId)
 }
 
 function handleImportError(env: Env, error: unknown): Response {

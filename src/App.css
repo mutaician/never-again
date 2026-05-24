@@ -279,6 +279,45 @@ button:hover {
   gap: 14px;
 }
 
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.processing-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.progress-track {
+  height: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.26);
+}
+
+.progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #56c4cd;
+  transition: width 220ms ease;
+}
+
+.job-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.job-meta span {
+  color: var(--text-muted);
+  font: 700 11px/1 var(--mono);
+}
+
 .pipeline {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -363,6 +402,22 @@ label span,
   display: grid;
   gap: 12px;
   margin-top: 18px;
+}
+
+.empty-state {
+  min-height: 108px;
+  display: grid;
+  place-items: center;
+  margin-top: 18px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.empty-state strong {
+  color: var(--text);
+  font-size: 14px;
 }
 
 .lesson-item {
@@ -499,6 +554,10 @@ button:focus-visible {
   margin: 12px 0 0;
   color: var(--text-muted);
   font-size: 13px;
+}
+
+.form-message.is-error {
+  color: #f17975;
 }
 
 button:disabled {

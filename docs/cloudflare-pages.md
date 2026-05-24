@@ -203,5 +203,11 @@ For chunking details:
 pnpm d1:chunks:local
 ```
 
-New imports should move from `normalized` to `chunked`, and their job should move to `ready_for_analysis`.
-Do not deploy until `/api/me` reuses the same user row and the import form creates chunk rows locally.
+For chunk findings:
+
+```bash
+pnpm d1:findings:local
+```
+
+New imports should move through `chunked` and then to `findings_ready` after Backboard analyzes the chunks with memory off.
+Do not deploy until `/api/me` reuses the same user row and the import form creates chunk rows and findings locally.

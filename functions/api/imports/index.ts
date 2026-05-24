@@ -7,7 +7,10 @@ import {
   optionsResponse,
 } from '../../_shared/http'
 import { createImport } from '../../_shared/imports'
-import { processImportIntoChunks } from '../../_shared/processing'
+import {
+  analyzeImportChunks,
+  processImportIntoChunks,
+} from '../../_shared/processing'
 import { requireRequestSession } from '../../_shared/session'
 
 export const onRequestOptions: PagesFunction<Env> = async ({ env }) => {
@@ -36,11 +39,12 @@ export const onRequestPost: PagesFunction<Env> = async ({
     })
 
     waitUntil(
-      processImportIntoChunks(
+      processImportWorkflow(
         env,
         session.user.id,
         result.importRecord.id,
         result.job.id,
+        session.user.backboard_assistant_id,
       ),
     )
 
@@ -56,6 +60,20 @@ export const onRequestPost: PagesFunction<Env> = async ({
   } catch (error) {
     return handleImportError(env, error)
   }
+}
+
+async function processImportWorkflow(
+  env: Env,
+  userId: string,
+  importId: string,
+  jobId: string,
+  assistantId: string | null,
+): Promise<void> {
+  await processImportIntoChunks(env, userId, importId, jobId)
+
+  if (!assistantId) return
+
+  await analyzeImportChunks(env, userId, importId, jobId, assistantId)
 }
 
 function handleImportError(env: Env, error: unknown): Response {

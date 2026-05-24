@@ -1,4 +1,5 @@
 import { getRequiredEnv, type Env } from './env'
+import { ApiError } from './http'
 
 type BackboardAssistantResponse = {
   assistant_id: string
@@ -6,8 +7,24 @@ type BackboardAssistantResponse = {
   name: string
 }
 
+type BackboardMemoryResponse = {
+  data?: {
+    id?: string
+    memory_id?: string
+  }
+  id?: string
+  memory?: {
+    id?: string
+    memory_id?: string
+  }
+  memory_id?: string
+  memory_operation_id?: string
+  operation_id?: string
+}
+
 type BackboardMessageResponse = {
   content: string
+  memory_operation_id?: string
   message_id?: string
   model_name?: string
   model_provider?: string
@@ -21,7 +38,7 @@ type BackboardMessageRequest = {
   content: string
   json_output: boolean
   llm_provider?: string
-  memory: 'off'
+  memory: 'Auto' | 'off'
   metadata: Record<string, unknown>
   model_name?: string
   stream: false
@@ -62,6 +79,19 @@ export type LessonDraft = {
   evidence: string
   futureRule: string
   problemPattern: string
+  title: string
+}
+
+export type SavedMemoryInput = {
+  category: string
+  confidence: number
+  evidence: string
+  futureRule: string
+  importId: string | null
+  lessonId: string
+  problemPattern: string
+  projectId: string
+  projectName: string
   title: string
 }
 
@@ -190,6 +220,130 @@ export async function reduceFindingsWithBackboard(
   return parseLessonReduction(message.content)
 }
 
+export async function addBackboardMemory(
+  env: Env,
+  assistantId: string,
+  input: SavedMemoryInput,
+): Promise<string> {
+  try {
+    return await addManualBackboardMemory(env, assistantId, input)
+  } catch (manualError) {
+    return addApprovedLessonMemoryMessage(env, assistantId, input, manualError)
+  }
+}
+
+async function addManualBackboardMemory(
+  env: Env,
+  assistantId: string,
+  input: SavedMemoryInput,
+): Promise<string> {
+  const apiKey = getRequiredEnv(env, 'BACKBOARD_API_KEY')
+  const baseUrl = (env.BACKBOARD_BASE_URL || 'https://app.backboard.io/api')
+    .replace(/\/$/, '')
+
+  const response = await fetch(
+    `${baseUrl}/assistants/${encodeURIComponent(assistantId)}/memories`,
+    {
+      body: JSON.stringify({
+        content: memoryContent(input),
+        metadata: memoryMetadata(input),
+      }),
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': apiKey,
+      },
+      method: 'POST',
+    },
+  )
+
+  if (!response.ok) {
+    const message = await response.text()
+    throw new ApiError(
+      502,
+      'server_error',
+      `Backboard memory save failed: ${message}`,
+    )
+  }
+
+  const responseText = await response.text()
+  const memory = parseMemoryResponse(responseText)
+  const memoryId =
+    memory.memory_id ||
+    memory.id ||
+    memory.memory?.memory_id ||
+    memory.memory?.id ||
+    memory.data?.memory_id ||
+    memory.data?.id ||
+    memory.memory_operation_id ||
+    memory.operation_id
+
+  if (!memoryId) {
+    throw new ApiError(
+      502,
+      'server_error',
+      `Backboard memory response did not include memory_id: ${summarizeResponseText(responseText)}`,
+    )
+  }
+
+  return memoryId
+}
+
+async function addApprovedLessonMemoryMessage(
+  env: Env,
+  assistantId: string,
+  input: SavedMemoryInput,
+  manualError: unknown,
+): Promise<string> {
+  const apiKey = getRequiredEnv(env, 'BACKBOARD_API_KEY')
+  const baseUrl = (env.BACKBOARD_BASE_URL || 'https://app.backboard.io/api')
+    .replace(/\/$/, '')
+
+  const response = await fetch(`${baseUrl}/threads/messages`, {
+    body: JSON.stringify(withModelConfig(env, {
+      assistant_id: assistantId,
+      content: approvedMemoryPrompt(input),
+      json_output: false,
+      memory: 'Auto',
+      metadata: {
+        ...memoryMetadata(input),
+        manual_memory_fallback: 'true',
+      },
+      stream: false,
+      web_search: 'off',
+    })),
+    headers: {
+      'Content-Type': 'application/json',
+      'X-API-Key': apiKey,
+    },
+    method: 'POST',
+  })
+
+  if (!response.ok) {
+    const fallbackMessage = await response.text()
+    const manualMessage =
+      manualError instanceof Error ? manualError.message : 'Manual memory save failed'
+
+    throw new ApiError(
+      502,
+      'server_error',
+      `${manualMessage}; fallback memory message failed: ${fallbackMessage}`,
+    )
+  }
+
+  const message = (await response.json()) as BackboardMessageResponse
+  const operationId = message.memory_operation_id
+
+  if (!operationId) {
+    throw new ApiError(
+      502,
+      'server_error',
+      'Backboard fallback memory message did not include memory_operation_id',
+    )
+  }
+
+  return `operation:${operationId}`
+}
+
 function assistantName(userName: string | null): string {
   if (!userName) return 'Never Again Builder Memory'
   return `Never Again Builder Memory - ${userName}`.slice(0, 255)
@@ -207,6 +361,55 @@ function withModelConfig(
     ...(llmProvider ? { llm_provider: llmProvider } : {}),
     ...(modelName ? { model_name: modelName } : {}),
   }
+}
+
+function memoryContent(input: SavedMemoryInput): string {
+  return [
+    `Builder lesson: ${input.title}`,
+    `Category: ${input.category}`,
+    `Pattern: ${input.problemPattern}`,
+    `Future rule: ${input.futureRule}`,
+    `Source evidence: ${input.evidence}`,
+  ].join('\n')
+}
+
+function memoryMetadata(input: SavedMemoryInput): Record<string, string> {
+  return {
+    category: input.category,
+    confidence: String(input.confidence),
+    ...(input.importId ? { import_id: input.importId } : {}),
+    lesson_id: input.lessonId,
+    project_id: input.projectId,
+    project_name: input.projectName,
+    source: 'conversation_import',
+    type: 'builder_lesson',
+  }
+}
+
+function approvedMemoryPrompt(input: SavedMemoryInput): string {
+  return `
+The user has explicitly approved the following durable builder memory.
+Store it as long-term memory for future project preflights.
+
+${memoryContent(input)}
+`.trim()
+}
+
+function parseMemoryResponse(responseText: string): BackboardMemoryResponse {
+  if (!responseText.trim()) return {}
+
+  try {
+    return JSON.parse(responseText) as BackboardMemoryResponse
+  } catch {
+    return {}
+  }
+}
+
+function summarizeResponseText(responseText: string): string {
+  const trimmed = responseText.trim()
+  if (!trimmed) return '[empty response]'
+
+  return trimmed.length > 500 ? `${trimmed.slice(0, 500)}...` : trimmed
 }
 
 function chunkAnalysisPrompt(

@@ -78,6 +78,14 @@ export type CreateImportResult = {
   project: Project
 }
 
+export type UpdateLessonInput = {
+  category?: string
+  evidence?: string
+  futureRule?: string
+  problemPattern?: string
+  title?: string
+}
+
 type MeResponse = {
   assistant: {
     created: boolean
@@ -134,12 +142,20 @@ export async function fetchProjects(accessToken: string): Promise<Project[]> {
   return data.projects
 }
 
-export async function fetchLessonDrafts(accessToken: string): Promise<Lesson[]> {
+export async function fetchLessons(
+  accessToken: string,
+  status?: string,
+): Promise<Lesson[]> {
+  const query = status ? `?status=${encodeURIComponent(status)}` : ''
   const data = await apiRequest<{ lessons: Lesson[] }>(
     accessToken,
-    '/api/lessons?status=draft',
+    `/api/lessons${query}`,
   )
   return data.lessons
+}
+
+export async function fetchLessonDrafts(accessToken: string): Promise<Lesson[]> {
+  return fetchLessons(accessToken, 'draft')
 }
 
 export async function fetchImportJob(
@@ -148,6 +164,42 @@ export async function fetchImportJob(
 ): Promise<ImportJob> {
   const data = await apiRequest<{ job: ImportJob }>(accessToken, `/api/jobs/${jobId}`)
   return data.job
+}
+
+export async function updateLesson(
+  accessToken: string,
+  lessonId: string,
+  input: UpdateLessonInput,
+): Promise<Lesson> {
+  const data = await apiRequest<{ lesson: Lesson }>(accessToken, `/api/lessons/${lessonId}`, {
+    body: JSON.stringify(input),
+    method: 'PATCH',
+  })
+  return data.lesson
+}
+
+export async function approveLesson(
+  accessToken: string,
+  lessonId: string,
+): Promise<Lesson> {
+  const data = await apiRequest<{ lesson: Lesson }>(
+    accessToken,
+    `/api/lessons/${lessonId}/approve`,
+    { method: 'POST' },
+  )
+  return data.lesson
+}
+
+export async function rejectLesson(
+  accessToken: string,
+  lessonId: string,
+): Promise<Lesson> {
+  const data = await apiRequest<{ lesson: Lesson }>(
+    accessToken,
+    `/api/lessons/${lessonId}/reject`,
+    { method: 'POST' },
+  )
+  return data.lesson
 }
 
 async function apiRequest<T>(

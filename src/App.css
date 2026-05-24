@@ -447,7 +447,17 @@ label span,
 
 .lesson-actions > div {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+}
+
+.edit-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.edit-grid textarea {
+  min-height: 96px;
 }
 
 .primary-action {
@@ -462,6 +472,35 @@ label span,
 .primary-action:hover {
   border-color: #9fe3e8;
   background: #7ad7de;
+}
+
+.secondary-action,
+.danger-action {
+  min-height: 38px;
+  padding: 0 12px;
+  border-color: var(--border);
+  background: rgba(255, 255, 255, 0.035);
+  font-weight: 700;
+}
+
+.secondary-action {
+  color: var(--text-strong);
+}
+
+.danger-action {
+  color: #f17975;
+  border-color: rgba(241, 121, 117, 0.34);
+  background: rgba(241, 121, 117, 0.06);
+}
+
+.secondary-action:hover {
+  border-color: rgba(86, 196, 205, 0.36);
+  background: rgba(86, 196, 205, 0.08);
+}
+
+.danger-action:hover {
+  border-color: rgba(241, 121, 117, 0.54);
+  background: rgba(241, 121, 117, 0.1);
 }
 
 .rule-block,

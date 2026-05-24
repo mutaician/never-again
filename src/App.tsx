@@ -2,16 +2,20 @@ import { useAuth0 } from '@auth0/auth0-react'
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import './App.css'
 import {
+  approveLesson as approveLessonRequest,
   createTranscriptImport,
   fetchImportJob,
-  fetchLessonDrafts,
+  fetchLessons as fetchLessonsRequest,
   fetchMe,
   hasApiAudience,
+  rejectLesson as rejectLessonRequest,
+  updateLesson as updateLessonRequest,
   type ApiSession,
   type CreateImportInput,
   type CreateImportResult,
   type ImportJob as ApiImportJob,
   type Lesson as ApiLesson,
+  type UpdateLessonInput,
 } from './lib/api'
 
 type ViewKey = 'dashboard' | 'import' | 'review' | 'memory' | 'preflight'
@@ -26,17 +30,23 @@ type WorkspaceProps = AppProps & {
 }
 
 type ApiActions = {
+  approveLesson: (lessonId: string) => Promise<Lesson>
   createImport: (input: CreateImportInput) => Promise<CreateImportResult>
   fetchJob: (jobId: string) => Promise<ApiImportJob>
-  fetchLessons: () => Promise<Lesson[]>
+  fetchLessons: (status?: string) => Promise<Lesson[]>
+  rejectLesson: (lessonId: string) => Promise<Lesson>
+  updateLesson: (lessonId: string, input: UpdateLessonInput) => Promise<Lesson>
 }
 
 type Lesson = {
+  backboardMemoryId: string | null
   id: string
   title: string
   category: string
   confidence: number
   evidence: string
+  problemPattern: string
+  projectName: string
   rule: string
   status: string
 }
@@ -65,34 +75,43 @@ const navItems: Array<{ id: ViewKey; label: string; shortcut: string }> = [
 
 const previewLessons: Lesson[] = [
   {
+    backboardMemoryId: null,
     id: 'preview-scope',
     title: 'Start simulation ideas with one playable slice',
     category: 'scope',
     confidence: 91,
     evidence:
       'The Artemis project expanded across physics, camera systems, assets, mission sequence, and realism before one interaction was proven.',
+    problemPattern: 'The project expanded into many unfamiliar systems before a small working slice was proven.',
+    projectName: 'Artemis Recovery Postmortem',
     rule:
       'For game-like projects, validate one scene, one control mode, and one success condition first.',
     status: 'draft',
   },
   {
+    backboardMemoryId: null,
     id: 'preview-domain',
     title: 'Challenge hidden domain complexity before coding',
     category: 'domain_knowledge',
     confidence: 86,
     evidence:
       'The build depended on game development concepts that were discovered only after implementation began.',
+    problemPattern: 'Important domain complexity was discovered after implementation had already started.',
+    projectName: 'Artemis Recovery Postmortem',
     rule:
       'Before coding an unfamiliar domain, ask the agent for a complexity map and a reduced vertical slice.',
     status: 'draft',
   },
   {
+    backboardMemoryId: 'preview-memory',
     id: 'preview-agent-behavior',
     title: 'Stop agents from rewriting working surfaces',
     category: 'agent_behavior',
     confidence: 82,
     evidence:
       'Several fixes introduced regressions because the agent changed nearby behavior while chasing a single bug.',
+    problemPattern: 'Broad agent edits created regressions while trying to fix a narrow failure.',
+    projectName: 'Artemis Recovery Postmortem',
     rule:
       'Constrain repair prompts to the failing module, require a diff summary, and test before broad edits.',
     status: 'saved',
@@ -143,6 +162,11 @@ function AuthenticatedWorkspace() {
     if (!hasApiAudience) return null
 
     return {
+      approveLesson: async (lessonId) => {
+        const token = await getAccessTokenSilently()
+        const row = await approveLessonRequest(token, lessonId)
+        return toLesson(row)
+      },
       createImport: async (input) => {
         const token = await getAccessTokenSilently()
         return createTranscriptImport(token, input)
@@ -151,10 +175,20 @@ function AuthenticatedWorkspace() {
         const token = await getAccessTokenSilently()
         return fetchImportJob(token, jobId)
       },
-      fetchLessons: async () => {
+      fetchLessons: async (status) => {
         const token = await getAccessTokenSilently()
-        const rows = await fetchLessonDrafts(token)
+        const rows = await fetchLessonsRequest(token, status)
         return rows.map(toLesson)
+      },
+      rejectLesson: async (lessonId) => {
+        const token = await getAccessTokenSilently()
+        const row = await rejectLessonRequest(token, lessonId)
+        return toLesson(row)
+      },
+      updateLesson: async (lessonId, input) => {
+        const token = await getAccessTokenSilently()
+        const row = await updateLessonRequest(token, lessonId, input)
+        return toLesson(row)
       },
     }
   }, [getAccessTokenSilently])
@@ -231,8 +265,13 @@ function AuthenticatedWorkspace() {
 function Workspace({ apiActions, apiSession, authEnabled }: WorkspaceProps) {
   const [activeView, setActiveView] = useState<ViewKey>('dashboard')
   const [lessonState, setLessonState] = useState<LessonState>({
-    lessons: apiActions ? [] : previewLessons,
+    lessons: apiActions ? [] : previewLessons.filter((lesson) => !isSavedLesson(lesson)),
     message: apiActions ? null : 'Preview lessons shown until the API is connected.',
+    status: 'idle',
+  })
+  const [memoryState, setMemoryState] = useState<LessonState>({
+    lessons: apiActions ? [] : previewLessons.filter(isSavedLesson),
+    message: apiActions ? null : 'Preview memory shown until the API is connected.',
     status: 'idle',
   })
   const [processingState, setProcessingState] = useState<ProcessingState>({
@@ -243,13 +282,15 @@ function Workspace({ apiActions, apiSession, authEnabled }: WorkspaceProps) {
     status: 'idle',
   })
 
-  const displayLessons = apiActions ? lessonState.lessons : previewLessons
+  const displayLessons = apiActions
+    ? lessonState.lessons
+    : previewLessons.filter((lesson) => !isSavedLesson(lesson))
+  const displayMemories = apiActions
+    ? memoryState.lessons
+    : previewLessons.filter(isSavedLesson)
   const activeJobId = processingState.job?.id ?? null
-  const savedLessons = useMemo(
-    () => displayLessons.filter((lesson) => isSavedLesson(lesson)).length,
-    [displayLessons],
-  )
-  const draftLessons = displayLessons.length - savedLessons
+  const savedLessons = displayMemories.length
+  const draftLessons = displayLessons.length
   const refreshLessons = useCallback(async () => {
     if (!apiActions) return
 
@@ -260,7 +301,7 @@ function Workspace({ apiActions, apiSession, authEnabled }: WorkspaceProps) {
     }))
 
     try {
-      const freshLessons = await apiActions.fetchLessons()
+      const freshLessons = await apiActions.fetchLessons('draft')
 
       setLessonState({
         lessons: freshLessons,
@@ -279,10 +320,40 @@ function Workspace({ apiActions, apiSession, authEnabled }: WorkspaceProps) {
     }
   }, [apiActions])
 
+  const refreshMemories = useCallback(async () => {
+    if (!apiActions) return
+
+    setMemoryState((current) => ({
+      ...current,
+      message: 'Loading saved memories.',
+      status: 'loading',
+    }))
+
+    try {
+      const freshMemories = await apiActions.fetchLessons('saved')
+
+      setMemoryState({
+        lessons: freshMemories,
+        message: null,
+        status: 'ready',
+      })
+    } catch (memoryError) {
+      setMemoryState((current) => ({
+        ...current,
+        message:
+          memoryError instanceof Error
+            ? memoryError.message
+            : 'Unable to load saved memories.',
+        status: 'error',
+      }))
+    }
+  }, [apiActions])
+
   useEffect(() => {
     if (apiSession.status !== 'ready') return
     void refreshLessons()
-  }, [apiSession.status, refreshLessons])
+    void refreshMemories()
+  }, [apiSession.status, refreshLessons, refreshMemories])
 
   const handleImportQueued = useCallback((result: CreateImportResult) => {
     setActiveView('review')
@@ -357,6 +428,93 @@ function Workspace({ apiActions, apiSession, authEnabled }: WorkspaceProps) {
     }
   }, [activeJobId, apiActions, processingState.status, refreshLessons])
 
+  const handleUpdateLesson = useCallback(
+    async (lessonId: string, input: UpdateLessonInput) => {
+      if (!apiActions) return
+
+      setLessonState((current) => ({
+        ...current,
+        message: 'Saving lesson edits.',
+        status: 'loading',
+      }))
+
+      try {
+        await apiActions.updateLesson(lessonId, input)
+        await refreshLessons()
+      } catch (lessonError) {
+        setLessonState((current) => ({
+          ...current,
+          message:
+            lessonError instanceof Error
+              ? lessonError.message
+              : 'Unable to save lesson edits.',
+          status: 'error',
+        }))
+      }
+    },
+    [apiActions, refreshLessons],
+  )
+
+  const handleRejectLesson = useCallback(
+    async (lessonId: string) => {
+      if (!apiActions) return
+
+      setLessonState((current) => ({
+        ...current,
+        message: 'Rejecting lesson draft.',
+        status: 'loading',
+      }))
+
+      try {
+        await apiActions.rejectLesson(lessonId)
+        await refreshLessons()
+      } catch (lessonError) {
+        setLessonState((current) => ({
+          ...current,
+          message:
+            lessonError instanceof Error
+              ? lessonError.message
+              : 'Unable to reject lesson.',
+          status: 'error',
+        }))
+      }
+    },
+    [apiActions, refreshLessons],
+  )
+
+  const handleApproveLesson = useCallback(
+    async (lessonId: string) => {
+      if (!apiActions) return
+
+      setLessonState((current) => ({
+        ...current,
+        message: 'Saving approved lesson into Backboard memory.',
+        status: 'loading',
+      }))
+
+      try {
+        await apiActions.approveLesson(lessonId)
+        await refreshLessons()
+        await refreshMemories()
+        setLessonState((current) => ({
+          ...current,
+          message: 'Saved to Backboard memory. Continue reviewing the remaining drafts.',
+          status: 'ready',
+        }))
+      } catch (lessonError) {
+        setLessonState((current) => ({
+          ...current,
+          message:
+            lessonError instanceof Error
+              ? lessonError.message
+              : 'Unable to save lesson into memory.',
+          status: 'error',
+        }))
+      }
+    },
+    [apiActions, refreshLessons, refreshMemories],
+  )
+
   return (
     <div className="app-shell">
       <aside className="sidebar" aria-label="Primary">
@@ -417,10 +575,16 @@ function Workspace({ apiActions, apiSession, authEnabled }: WorkspaceProps) {
             activeView,
             apiActions,
             lessonState,
+            memoryState,
             processingState,
             handleImportQueued,
             refreshLessons,
+            refreshMemories,
+            handleUpdateLesson,
+            handleRejectLesson,
+            handleApproveLesson,
             displayLessons,
+            displayMemories,
           )}
         </section>
       </main>
@@ -563,10 +727,16 @@ function renderView(
   activeView: ViewKey,
   apiActions: ApiActions | null,
   lessonState: LessonState,
+  memoryState: LessonState,
   processingState: ProcessingState,
   onImportQueued: (result: CreateImportResult) => void,
   onRefreshLessons: () => Promise<void>,
+  onRefreshMemories: () => Promise<void>,
+  onUpdateLesson: (lessonId: string, input: UpdateLessonInput) => Promise<void>,
+  onRejectLesson: (lessonId: string) => Promise<void>,
+  onApproveLesson: (lessonId: string) => Promise<void>,
   lessons: Lesson[],
+  memories: Lesson[],
 ) {
   if (activeView === 'import') {
     return <ImportView apiActions={apiActions} onImportQueued={onImportQueued} />
@@ -575,12 +745,23 @@ function renderView(
     return (
       <ReviewView
         lessonState={lessonState}
+        onApprove={onApproveLesson}
         onRefresh={onRefreshLessons}
+        onReject={onRejectLesson}
+        onUpdate={onUpdateLesson}
         processingState={processingState}
       />
     )
   }
-  if (activeView === 'memory') return <MemoryView />
+  if (activeView === 'memory') {
+    return (
+      <MemoryView
+        memoryState={memoryState}
+        memories={memories}
+        onRefresh={onRefreshMemories}
+      />
+    )
+  }
   if (activeView === 'preflight') return <PreflightView />
   return <DashboardView lessons={lessons} />
 }
@@ -779,11 +960,17 @@ function importStatusLabel(tone: 'idle' | 'success' | 'error'): string {
 
 function ReviewView({
   lessonState,
+  onApprove,
   onRefresh,
+  onReject,
+  onUpdate,
   processingState,
 }: {
   lessonState: LessonState
+  onApprove: (lessonId: string) => Promise<void>
   onRefresh: () => Promise<void>
+  onReject: (lessonId: string) => Promise<void>
+  onUpdate: (lessonId: string, input: UpdateLessonInput) => Promise<void>
   processingState: ProcessingState
 }) {
   return (
@@ -821,6 +1008,9 @@ function ReviewView({
           }
           lessons={lessonState.lessons}
           mode="review"
+          onApprove={onApprove}
+          onReject={onReject}
+          onUpdate={onUpdate}
         />
       </section>
     </div>
@@ -871,30 +1061,60 @@ function ProcessingPanel({
   )
 }
 
-function MemoryView() {
+function MemoryView({
+  memories,
+  memoryState,
+  onRefresh,
+}: {
+  memories: Lesson[]
+  memoryState: LessonState
+  onRefresh: () => Promise<void>
+}) {
   return (
     <section className="panel">
       <div className="section-heading">
         <div>
           <p className="eyebrow">Memory ledger</p>
           <h2>Saved builder rules</h2>
+          {memoryState.message && <p className="microcopy">{memoryState.message}</p>}
         </div>
-        <span className="status-pill is-good">Backboard ready</span>
+        <div className="section-actions">
+          <span className={lessonStatusClass(memoryState.status)}>
+            {memories.length} saved
+          </span>
+          <button
+            disabled={memoryState.status === 'loading'}
+            onClick={() => {
+              void onRefresh()
+            }}
+            type="button"
+          >
+            Refresh
+          </button>
+        </div>
       </div>
-      <div className="ledger-table">
-        <div className="ledger-row ledger-head">
-          <span>Rule</span>
-          <span>Category</span>
-          <span>Source</span>
-          <span>Status</span>
+      {memories.length === 0 ? (
+        <div className="empty-state">
+          <strong>No saved memories yet.</strong>
         </div>
-        <div className="ledger-row">
-          <span>Stop agents from rewriting working surfaces</span>
-          <span>Agent behavior</span>
-          <span>Artemis Recovery</span>
-          <span>Saved</span>
+      ) : (
+        <div className="ledger-table">
+          <div className="ledger-row ledger-head">
+            <span>Rule</span>
+            <span>Category</span>
+            <span>Source</span>
+            <span>Status</span>
+          </div>
+          {memories.map((memory) => (
+            <div className="ledger-row" key={memory.id}>
+              <span>{memory.rule}</span>
+              <span>{formatCategory(memory.category)}</span>
+              <span>{memory.projectName}</span>
+              <span>{memory.backboardMemoryId ? 'Saved' : formatStatus(memory.status)}</span>
+            </div>
+          ))}
         </div>
-      </div>
+      )}
     </section>
   )
 }
@@ -941,10 +1161,16 @@ function LessonList({
   emptyMessage = 'No draft lessons yet.',
   lessons,
   mode,
+  onApprove,
+  onReject,
+  onUpdate,
 }: {
   emptyMessage?: string
   lessons: Lesson[]
   mode: 'compact' | 'review'
+  onApprove?: (lessonId: string) => Promise<void>
+  onReject?: (lessonId: string) => Promise<void>
+  onUpdate?: (lessonId: string, input: UpdateLessonInput) => Promise<void>
 }) {
   if (lessons.length === 0) {
     return (
@@ -957,11 +1183,124 @@ function LessonList({
   return (
     <div className="lesson-list">
       {lessons.map((lesson) => (
-        <article className="lesson-item" key={lesson.id}>
-          <div className="lesson-topline">
-            <span className="category">{formatCategory(lesson.category)}</span>
-            <span>{formatConfidence(lesson.confidence)}% confidence</span>
-          </div>
+        <LessonCard
+          key={lesson.id}
+          lesson={lesson}
+          mode={mode}
+          onApprove={onApprove}
+          onReject={onReject}
+          onUpdate={onUpdate}
+        />
+      ))}
+    </div>
+  )
+}
+
+function LessonCard({
+  lesson,
+  mode,
+  onApprove,
+  onReject,
+  onUpdate,
+}: {
+  lesson: Lesson
+  mode: 'compact' | 'review'
+  onApprove?: (lessonId: string) => Promise<void>
+  onReject?: (lessonId: string) => Promise<void>
+  onUpdate?: (lessonId: string, input: UpdateLessonInput) => Promise<void>
+}) {
+  const [isEditing, setIsEditing] = useState(false)
+  const [draft, setDraft] = useState({
+    category: lesson.category,
+    evidence: lesson.evidence,
+    problemPattern: lesson.problemPattern,
+    rule: lesson.rule,
+    title: lesson.title,
+  })
+
+  async function saveEdits() {
+    if (!onUpdate) return
+
+    await onUpdate(lesson.id, {
+      category: draft.category,
+      evidence: draft.evidence,
+      futureRule: draft.rule,
+      problemPattern: draft.problemPattern,
+      title: draft.title,
+    })
+    setIsEditing(false)
+  }
+
+  return (
+    <article className="lesson-item">
+      <div className="lesson-topline">
+        <span className="category">{formatCategory(lesson.category)}</span>
+        <span>{formatConfidence(lesson.confidence)}% confidence</span>
+      </div>
+      {isEditing ? (
+        <div className="edit-grid">
+          <label>
+            <span>Title</span>
+            <input
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, title: event.target.value }))
+              }
+              value={draft.title}
+            />
+          </label>
+          <label>
+            <span>Category</span>
+            <select
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, category: event.target.value }))
+              }
+              value={draft.category}
+            >
+              <option value="scope">Scope</option>
+              <option value="architecture">Architecture</option>
+              <option value="agent_behavior">Agent behavior</option>
+              <option value="prompting">Prompting</option>
+              <option value="domain_knowledge">Domain knowledge</option>
+              <option value="testing">Testing</option>
+              <option value="ux">UX</option>
+              <option value="tooling">Tooling</option>
+              <option value="deployment">Deployment</option>
+              <option value="unknown">Unknown</option>
+            </select>
+          </label>
+          <label>
+            <span>Pattern</span>
+            <textarea
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  problemPattern: event.target.value,
+                }))
+              }
+              value={draft.problemPattern}
+            />
+          </label>
+          <label>
+            <span>Evidence</span>
+            <textarea
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, evidence: event.target.value }))
+              }
+              value={draft.evidence}
+            />
+          </label>
+          <label>
+            <span>Future rule</span>
+            <textarea
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, rule: event.target.value }))
+              }
+              value={draft.rule}
+            />
+          </label>
+        </div>
+      ) : (
+        <>
           <h3>{lesson.title}</h3>
           <p>{lesson.evidence}</p>
           {mode === 'review' && (
@@ -970,23 +1309,68 @@ function LessonList({
               <strong>{lesson.rule}</strong>
             </div>
           )}
-          <div className="lesson-actions">
-            <span className={isSavedLesson(lesson) ? 'status-pill is-good' : 'status-pill is-muted'}>
-              {formatStatus(lesson.status)}
-            </span>
+        </>
+      )}
+      <div className="lesson-actions">
+        <span className={isSavedLesson(lesson) ? 'status-pill is-good' : 'status-pill is-muted'}>
+          {formatStatus(lesson.status)}
+        </span>
+        {mode === 'review' && (
+          <div>
+            {isEditing ? (
+              <>
+                <button onClick={() => setIsEditing(false)} type="button">
+                  Cancel
+                </button>
+                <button className="primary-action" onClick={saveEdits} type="button">
+                  Save edit
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  className="secondary-action"
+                  onClick={() => setIsEditing(true)}
+                  type="button"
+                >
+                  Edit draft
+                </button>
+                <button
+                  className="danger-action"
+                  onClick={() => {
+                    void onReject?.(lesson.id)
+                  }}
+                  type="button"
+                >
+                  Reject
+                </button>
+                <button
+                  className="primary-action"
+                  onClick={() => {
+                    void onApprove?.(lesson.id)
+                  }}
+                  type="button"
+                >
+                  Save to memory
+                </button>
+              </>
+            )}
           </div>
-        </article>
-      ))}
-    </div>
+        )}
+      </div>
+    </article>
   )
 }
 
 function toLesson(row: ApiLesson): Lesson {
   return {
+    backboardMemoryId: row.backboard_memory_id,
     category: row.category,
     confidence: row.confidence,
     evidence: row.evidence,
     id: row.id,
+    problemPattern: row.problem_pattern,
+    projectName: row.project_name,
     rule: row.future_rule,
     status: row.status,
     title: row.title,

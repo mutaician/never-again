@@ -7,11 +7,12 @@ import {
 } from './backboard'
 import { chunkTranscript } from './chunking'
 import type { Env } from './env'
-import { getImport, getJob } from './imports'
+import { getImport, getJob, type JobRow } from './imports'
 import { getProject } from './projects'
 
 const MAX_CHUNKS_PER_ANALYSIS = 8
 const MAX_FINDINGS_PER_REDUCTION = 80
+const STALE_JOB_MS = 90_000
 
 type ChunkRow = {
   char_count: number
@@ -166,13 +167,13 @@ export async function analyzeImportChunks(
     const importRecord = await getImport(env, userId, importId)
     const job = await getJob(env, userId, jobId)
     const project = await getProject(env, userId, importRecord.project_id)
-    const chunks = await listReadyChunks(env, userId, importId)
+    const chunks = await listAnalyzableChunks(env, userId, importId)
 
     await markAnalysisStarted(env, userId, importId, job.id)
 
     const selectedChunks = chunks.slice(0, MAX_CHUNKS_PER_ANALYSIS)
 
-    for (const chunk of selectedChunks) {
+    for (const [index, chunk] of selectedChunks.entries()) {
       await markChunkStatus(env, chunk.id, 'analyzing')
 
       const object = await env.TRANSCRIPTS_BUCKET!.get(chunk.content_r2_key)
@@ -194,6 +195,7 @@ export async function analyzeImportChunks(
 
       await storeChunkFindings(env, userId, importId, chunk.id, analysis.findings)
       await markChunkStatus(env, chunk.id, 'analyzed')
+      await markAnalysisProgress(env, userId, jobId, selectedChunks.length, index + 1)
     }
 
     const now = new Date().toISOString()
@@ -220,6 +222,62 @@ export async function analyzeImportChunks(
     await markProcessingFailed(env, userId, importId, jobId, error, 'Analysis failed')
     throw error
   }
+}
+
+export async function resumeImportWorkflowIfNeeded(
+  env: Env,
+  userId: string,
+  jobId: string,
+  assistantId: string | null,
+): Promise<boolean> {
+  const job = await getJob(env, userId, jobId)
+
+  if (!shouldResumeJob(job)) return false
+
+  if (job.status === 'queued' || job.status === 'chunking') {
+    await processImportIntoChunks(env, userId, job.import_id, job.id)
+
+    if (!assistantId) {
+      await markProcessingFailed(
+        env,
+        userId,
+        job.import_id,
+        job.id,
+        new Error('Backboard assistant is not ready yet'),
+        'Analysis cannot start without a Backboard assistant',
+      )
+      return true
+    }
+
+    await analyzeImportChunks(env, userId, job.import_id, job.id, assistantId)
+    await reduceImportFindings(env, userId, job.import_id, job.id, assistantId)
+    return true
+  }
+
+  if (!assistantId) {
+    await markProcessingFailed(
+      env,
+      userId,
+      job.import_id,
+      job.id,
+      new Error('Backboard assistant is not ready yet'),
+      'Analysis cannot continue without a Backboard assistant',
+    )
+    return true
+  }
+
+  if (job.status === 'ready_for_analysis' || job.status === 'analyzing') {
+    await analyzeImportChunks(env, userId, job.import_id, job.id, assistantId)
+    await reduceImportFindings(env, userId, job.import_id, job.id, assistantId)
+    return true
+  }
+
+  if (job.status === 'findings_ready' || job.status === 'reducing') {
+    await reduceImportFindings(env, userId, job.import_id, job.id, assistantId)
+    return true
+  }
+
+  return false
 }
 
 export async function reduceImportFindings(
@@ -285,7 +343,7 @@ async function markProcessingStarted(
   ])
 }
 
-async function listReadyChunks(
+async function listAnalyzableChunks(
   env: Env,
   userId: string,
   importId: string,
@@ -296,13 +354,35 @@ async function listReadyChunks(
        FROM chunks
        WHERE user_id = ?
          AND import_id = ?
-         AND status IN ('ready_for_analysis', 'analyzed')
+         AND status IN ('ready_for_analysis', 'analyzing')
        ORDER BY chunk_index ASC`,
     )
     .bind(userId, importId)
     .all<ChunkRow>()
 
   return result.results
+}
+
+async function markAnalysisProgress(
+  env: Env,
+  userId: string,
+  jobId: string,
+  totalChunks: number,
+  completedChunks: number,
+): Promise<void> {
+  if (totalChunks <= 0) return
+
+  const progress = 40 + Math.round((completedChunks / totalChunks) * 20)
+
+  await env.DB!
+    .prepare(
+      `UPDATE jobs
+       SET progress = ?,
+           updated_at = ?
+       WHERE id = ? AND user_id = ?`,
+    )
+    .bind(Math.min(64, progress), new Date().toISOString(), jobId, userId)
+    .run()
 }
 
 async function markAnalysisStarted(
@@ -400,11 +480,14 @@ async function storeChunkFindings(
   findings: ChunkFinding[],
 ): Promise<void> {
   const now = new Date().toISOString()
+  const statements = [
+    env.DB!
+      .prepare('DELETE FROM chunk_findings WHERE chunk_id = ? AND user_id = ?')
+      .bind(chunkId, userId),
+  ]
 
-  if (findings.length === 0) return
-
-  await env.DB!.batch(
-    findings.map((finding) =>
+  statements.push(
+    ...findings.map((finding) =>
       env.DB!
         .prepare(
           `INSERT INTO chunk_findings (
@@ -430,6 +513,8 @@ async function storeChunkFindings(
         ),
     ),
   )
+
+  await env.DB!.batch(statements)
 }
 
 async function storeLessonDrafts(
@@ -589,6 +674,30 @@ async function markProcessingFailed(
       )
       .bind(message, now, jobId, userId),
   ])
+}
+
+function shouldResumeJob(job: JobRow): boolean {
+  if (job.status === 'ready_for_analysis' || job.status === 'findings_ready') {
+    return true
+  }
+
+  if (
+    job.status === 'queued' ||
+    job.status === 'chunking' ||
+    job.status === 'analyzing' ||
+    job.status === 'reducing'
+  ) {
+    return isStale(job.updated_at)
+  }
+
+  return false
+}
+
+function isStale(updatedAt: string): boolean {
+  const updatedAtMs = Date.parse(updatedAt)
+  if (Number.isNaN(updatedAtMs)) return true
+
+  return Date.now() - updatedAtMs > STALE_JOB_MS
 }
 
 async function sha256(text: string): Promise<string> {

@@ -758,16 +758,42 @@ function renderView(
     )
   }
   if (activeView === 'preflight') return <PreflightView />
-  return <DashboardView lessons={lessons} />
+  return <DashboardView lessons={lessons} memories={memories} />
 }
 
-function DashboardView({ lessons }: { lessons: Lesson[] }) {
+function DashboardView({
+  lessons,
+  memories,
+}: {
+  lessons: Lesson[]
+  memories: Lesson[]
+}) {
+  const latestMemory = memories[0] || null
+
   return (
     <div className="screen-grid">
-      <section className="panel hero-panel">
+      <section className="panel workspace-panel">
         <div>
-          <p className="eyebrow">Analysis pipeline</p>
-          <h2>Failed project conversations become reusable operating rules.</h2>
+          <p className="eyebrow">Workspace state</p>
+          <h2>{workspaceHeadline(lessons.length, memories.length)}</h2>
+          <p>
+            Import a stalled build conversation, review the lessons, and approve
+            only the rules worth carrying into future projects.
+          </p>
+        </div>
+        <div className="workspace-stats">
+          <div>
+            <span>Drafts waiting</span>
+            <strong>{lessons.length}</strong>
+          </div>
+          <div>
+            <span>Saved memories</span>
+            <strong>{memories.length}</strong>
+          </div>
+          <div>
+            <span>Manual captures</span>
+            <strong>{memories.filter(isManualLesson).length}</strong>
+          </div>
         </div>
         <div className="pipeline">
           {pipeline.map((step) => (
@@ -779,34 +805,55 @@ function DashboardView({ lessons }: { lessons: Lesson[] }) {
         </div>
       </section>
 
-      <section className="panel">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Latest extraction</p>
-            <h2>Lessons waiting for review</h2>
+      <section className="dashboard-grid">
+        <div className="panel">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Review queue</p>
+              <h2>Lessons waiting for approval</h2>
+            </div>
+            <span className="status-pill is-warn">Human gate</span>
           </div>
-          <span className="status-pill is-warn">Manual approval</span>
+          <LessonList
+            emptyMessage="No draft lessons waiting for review."
+            lessons={lessons.slice(0, 3)}
+            mode="compact"
+          />
         </div>
-        <LessonList
-          emptyMessage="No draft lessons waiting for review."
-          lessons={lessons}
-          mode="compact"
-        />
+
+        <div className="panel">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Latest memory</p>
+              <h2>{latestMemory ? latestMemory.title : 'No memory saved yet'}</h2>
+            </div>
+            <span className={latestMemory ? 'status-pill is-good' : 'status-pill is-muted'}>
+              {latestMemory ? 'Backboard' : 'Empty'}
+            </span>
+          </div>
+          {latestMemory ? (
+            <div className="compact-memory">
+              <p>{latestMemory.rule}</p>
+              <code>{latestMemory.backboardMemoryId || 'memory_pending'}</code>
+            </div>
+          ) : (
+            <div className="empty-state">
+              <strong>Approve a lesson to start the ledger.</strong>
+            </div>
+          )}
+        </div>
       </section>
 
-      <section className="panel split-panel">
+      <section className="panel next-actions">
         <div>
-          <p className="eyebrow">Memory strategy</p>
-          <h2>One user, one durable assistant</h2>
-          <p>
-            Raw transcript analysis stays temporary. Approved lessons are saved
-            into the user's Backboard assistant memory.
-          </p>
+          <p className="eyebrow">Next actions</p>
+          <h2>Build the memory trail before preflight</h2>
         </div>
-        <div className="callout">
-          <span>Backboard mode</span>
-          <strong>analysis: memory off</strong>
-          <strong>preflight: memory search</strong>
+        <div className="action-strip">
+          <span>Import a transcript</span>
+          <span>Approve strong lessons</span>
+          <span>Add missed manual lessons</span>
+          <span>Run preflight with saved memory</span>
         </div>
       </section>
     </div>
@@ -820,16 +867,14 @@ function ImportView({
   apiActions: ApiActions | null
   onImportQueued: (result: CreateImportResult) => void
 }) {
-  const [projectName, setProjectName] = useState('Artemis Recovery Postmortem')
-  const [sourcePlatform, setSourcePlatform] = useState('claude-code')
-  const [transcript, setTranscript] = useState(
-    'User: I think the Artemis II simulator is getting too complex.\nAssistant: We can simplify the scene.\nUser: Next time we should have started with one launch sequence before the whole mission.',
-  )
+  const [projectName, setProjectName] = useState('')
+  const [sourcePlatform, setSourcePlatform] = useState('cursor')
+  const [transcript, setTranscript] = useState('')
   const [importStatus, setImportStatus] = useState<{
     message: string
     tone: 'idle' | 'success' | 'error'
   }>({
-    message: 'Ready to create a project, import, and queued analysis job.',
+    message: 'Paste a conversation export from Cursor, Claude Code, ChatGPT, Windsurf, or similar tools.',
     tone: 'idle',
   })
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -840,6 +885,14 @@ function ImportView({
     if (!apiActions) {
       setImportStatus({
         message: 'API is not connected. Check VITE_AUTH0_AUDIENCE and VITE_API_BASE_URL.',
+        tone: 'error',
+      })
+      return
+    }
+
+    if (!projectName.trim() || !transcript.trim()) {
+      setImportStatus({
+        message: 'Add a project name and paste the transcript before queueing analysis.',
         tone: 'error',
       })
       return
@@ -882,7 +935,11 @@ function ImportView({
         <div className="section-heading">
           <div>
             <p className="eyebrow">Conversation import</p>
-            <h2>Paste the messy build log</h2>
+            <h2>Import a build conversation</h2>
+            <p className="microcopy">
+              Use exported chat text when possible. Code blocks can stay in;
+              normalization compresses code and keeps workflow-relevant commands.
+            </p>
           </div>
           <span className={importStatusClass(importStatus.tone)}>
             {importStatusLabel(importStatus.tone)}
@@ -893,7 +950,9 @@ function ImportView({
           <label>
             <span>Project name</span>
             <input
+              placeholder="Project or postmortem name"
               onChange={(event) => setProjectName(event.target.value)}
+              required
               value={projectName}
             />
           </label>
@@ -915,7 +974,9 @@ function ImportView({
         <label className="transcript-box">
           <span>Transcript</span>
           <textarea
+            placeholder="Paste the conversation turns here. Look for moments with corrections, regressions, scope changes, missed assumptions, or next-time rules."
             onChange={(event) => setTranscript(event.target.value)}
+            required
             value={transcript}
           />
         </label>
@@ -931,14 +992,14 @@ function ImportView({
       </form>
 
       <section className="panel">
-        <p className="eyebrow">Expected signals</p>
+        <p className="eyebrow">What to include</p>
         <div className="signal-list">
-          <span>Corrections</span>
-          <span>Scope drift</span>
-          <span>Agent loops</span>
-          <span>Regressions</span>
+          <span>User corrections</span>
+          <span>Repeated failures</span>
+          <span>Scope changes</span>
+          <span>Testing gaps</span>
+          <span>Agent missteps</span>
           <span>Next-time rules</span>
-          <span>Architecture regrets</span>
         </div>
       </section>
     </div>
@@ -1589,6 +1650,12 @@ function isSavedLesson(lesson: Lesson): boolean {
 
 function isManualLesson(lesson: Lesson): boolean {
   return !lesson.importId
+}
+
+function workspaceHeadline(draftCount: number, memoryCount: number): string {
+  if (draftCount > 0) return `${draftCount} lesson drafts need your call.`
+  if (memoryCount > 0) return `${memoryCount} memories ready for preflight.`
+  return 'Start by importing one messy build conversation.'
 }
 
 function memorySourceLabel(lesson: Lesson): string {

@@ -246,7 +246,8 @@ button:hover {
   padding: 20px;
 }
 
-.hero-panel {
+.hero-panel,
+.workspace-panel {
   min-height: 224px;
   display: grid;
   gap: 18px;
@@ -255,6 +256,12 @@ button:hover {
     linear-gradient(135deg, rgba(86, 196, 205, 0.1), transparent 38%),
     linear-gradient(315deg, rgba(233, 176, 73, 0.08), transparent 42%),
     rgba(17, 20, 24, 0.92);
+}
+
+.workspace-panel p {
+  max-width: 760px;
+  margin: 10px 0 0;
+  color: var(--text);
 }
 
 .panel h2,
@@ -267,6 +274,73 @@ button:hover {
   max-width: 720px;
   font-size: 28px;
   line-height: 1.12;
+}
+
+.workspace-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.workspace-stats div {
+  min-height: 82px;
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.workspace-stats span,
+.compact-memory p,
+.action-strip span {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.workspace-stats strong {
+  color: var(--text-strong);
+  font-size: 28px;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+  gap: 16px;
+}
+
+.compact-memory {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.compact-memory p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.next-actions {
+  display: grid;
+  gap: 16px;
+}
+
+.action-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.action-strip span {
+  min-height: 56px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  text-align: center;
 }
 
 .section-heading,
@@ -862,7 +936,10 @@ code {
   .split-panel,
   .signal-list,
   .memory-detail-grid,
-  .memory-summary {
+  .memory-summary,
+  .workspace-stats,
+  .dashboard-grid,
+  .action-strip {
     grid-template-columns: 1fr;
   }
 

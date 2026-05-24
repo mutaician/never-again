@@ -43,7 +43,9 @@ type ApiActions = {
 
 type Lesson = {
   backboardMemoryId: string | null
+  createdAt: string
   id: string
+  importId: string | null
   title: string
   category: string
   confidence: number
@@ -76,57 +78,12 @@ const navItems: Array<{ id: ViewKey; label: string; shortcut: string }> = [
   { id: 'preflight', label: 'Preflight', shortcut: '05' },
 ]
 
-const previewLessons: Lesson[] = [
-  {
-    backboardMemoryId: null,
-    id: 'preview-scope',
-    title: 'Start simulation ideas with one playable slice',
-    category: 'scope',
-    confidence: 91,
-    evidence:
-      'The Artemis project expanded across physics, camera systems, assets, mission sequence, and realism before one interaction was proven.',
-    problemPattern: 'The project expanded into many unfamiliar systems before a small working slice was proven.',
-    projectName: 'Artemis Recovery Postmortem',
-    rule:
-      'For game-like projects, validate one scene, one control mode, and one success condition first.',
-    status: 'draft',
-  },
-  {
-    backboardMemoryId: null,
-    id: 'preview-domain',
-    title: 'Challenge hidden domain complexity before coding',
-    category: 'domain_knowledge',
-    confidence: 86,
-    evidence:
-      'The build depended on game development concepts that were discovered only after implementation began.',
-    problemPattern: 'Important domain complexity was discovered after implementation had already started.',
-    projectName: 'Artemis Recovery Postmortem',
-    rule:
-      'Before coding an unfamiliar domain, ask the agent for a complexity map and a reduced vertical slice.',
-    status: 'draft',
-  },
-  {
-    backboardMemoryId: 'preview-memory',
-    id: 'preview-agent-behavior',
-    title: 'Stop agents from rewriting working surfaces',
-    category: 'agent_behavior',
-    confidence: 82,
-    evidence:
-      'Several fixes introduced regressions because the agent changed nearby behavior while chasing a single bug.',
-    problemPattern: 'Broad agent edits created regressions while trying to fix a narrow failure.',
-    projectName: 'Artemis Recovery Postmortem',
-    rule:
-      'Constrain repair prompts to the failing module, require a diff summary, and test before broad edits.',
-    status: 'saved',
-  },
-]
-
 const pipeline = [
-  { label: 'Normalize', value: 'done' },
-  { label: 'Redact', value: 'done' },
-  { label: 'Chunk', value: '18 chunks' },
-  { label: 'Analyze', value: 'running' },
-  { label: 'Reduce', value: 'queued' },
+  { label: 'Import', value: 'R2' },
+  { label: 'Normalize', value: 'Worker' },
+  { label: 'Chunk', value: 'D1' },
+  { label: 'Reduce', value: 'Review' },
+  { label: 'Memory', value: 'Backboard' },
 ]
 
 const apiAudienceMissingSession: ApiSession = {
@@ -273,13 +230,13 @@ function AuthenticatedWorkspace() {
 function Workspace({ apiActions, apiSession, authEnabled }: WorkspaceProps) {
   const [activeView, setActiveView] = useState<ViewKey>('dashboard')
   const [lessonState, setLessonState] = useState<LessonState>({
-    lessons: apiActions ? [] : previewLessons.filter((lesson) => !isSavedLesson(lesson)),
-    message: apiActions ? null : 'Preview lessons shown until the API is connected.',
+    lessons: [],
+    message: apiActions ? null : 'Connect the API to load lesson drafts.',
     status: 'idle',
   })
   const [memoryState, setMemoryState] = useState<LessonState>({
-    lessons: apiActions ? [] : previewLessons.filter(isSavedLesson),
-    message: apiActions ? null : 'Preview memory shown until the API is connected.',
+    lessons: [],
+    message: apiActions ? null : 'Connect the API to load saved memories.',
     status: 'idle',
   })
   const [processingState, setProcessingState] = useState<ProcessingState>({
@@ -290,15 +247,12 @@ function Workspace({ apiActions, apiSession, authEnabled }: WorkspaceProps) {
     status: 'idle',
   })
 
-  const displayLessons = apiActions
-    ? lessonState.lessons
-    : previewLessons.filter((lesson) => !isSavedLesson(lesson))
-  const displayMemories = apiActions
-    ? memoryState.lessons
-    : previewLessons.filter(isSavedLesson)
+  const displayLessons = lessonState.lessons
+  const displayMemories = memoryState.lessons
   const activeJobId = processingState.job?.id ?? null
   const savedLessons = displayMemories.length
   const draftLessons = displayLessons.length
+  const latestMemory = displayMemories[0] || null
   const refreshLessons = useCallback(async () => {
     if (!apiActions) return
 
@@ -597,7 +551,7 @@ function Workspace({ apiActions, apiSession, authEnabled }: WorkspaceProps) {
         <header className="topbar">
           <div>
             <p className="eyebrow">Current project</p>
-            <h1>Artemis Recovery Postmortem</h1>
+            <h1>{processingState.projectName || 'Builder memory workspace'}</h1>
           </div>
           <div className="topbar-actions">
             <span className={processingSummaryClass(processingState)}>
@@ -633,11 +587,8 @@ function Workspace({ apiActions, apiSession, authEnabled }: WorkspaceProps) {
       <aside className="inspector" aria-label="Builder memory inspector">
         <div className="inspector-section">
           <p className="eyebrow">Builder profile</p>
-          <h2>Risk pattern: ambitious unfamiliar systems</h2>
-          <p>
-            The current mock profile flags broad interactive builds as high-risk
-            until a vertical slice is defined.
-          </p>
+          <h2>{latestMemory ? latestMemory.title : 'No saved pattern yet'}</h2>
+          <p>{latestMemory ? latestMemory.problemPattern : 'Approve a lesson to build the durable profile.'}</p>
         </div>
 
         <div className="metric-stack">
@@ -650,16 +601,17 @@ function Workspace({ apiActions, apiSession, authEnabled }: WorkspaceProps) {
             <strong>{savedLessons}</strong>
           </div>
           <div>
-            <span>Redactions</span>
-            <strong>7</strong>
+            <span>Manual memories</span>
+            <strong>{displayMemories.filter(isManualLesson).length}</strong>
           </div>
         </div>
 
         <div className="inspector-section">
-          <p className="eyebrow">Next warning</p>
+          <p className="eyebrow">Latest rule</p>
           <p className="warning-copy">
-            New simulation or game-like ideas should begin with one contained
-            scene and a clear stop condition.
+            {latestMemory
+              ? latestMemory.rule
+              : 'Saved memories will appear here as reusable guidance.'}
           </p>
         </div>
       </aside>
@@ -835,7 +787,11 @@ function DashboardView({ lessons }: { lessons: Lesson[] }) {
           </div>
           <span className="status-pill is-warn">Manual approval</span>
         </div>
-        <LessonList lessons={lessons} mode="compact" />
+        <LessonList
+          emptyMessage="No draft lessons waiting for review."
+          lessons={lessons}
+          mode="compact"
+        />
       </section>
 
       <section className="panel split-panel">
@@ -1257,52 +1213,91 @@ function MemoryView({
   memoryState: LessonState
   onRefresh: () => Promise<void>
 }) {
+  const manualCount = memories.filter(isManualLesson).length
+  const transcriptCount = memories.length - manualCount
+
   return (
-    <section className="panel">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">Memory ledger</p>
-          <h2>Saved builder rules</h2>
-          {memoryState.message && <p className="microcopy">{memoryState.message}</p>}
-        </div>
-        <div className="section-actions">
-          <span className={lessonStatusClass(memoryState.status)}>
-            {memories.length} saved
-          </span>
-          <button
-            disabled={memoryState.status === 'loading'}
-            onClick={() => {
-              void onRefresh()
-            }}
-            type="button"
-          >
-            Refresh
-          </button>
-        </div>
-      </div>
-      {memories.length === 0 ? (
-        <div className="empty-state">
-          <strong>No saved memories yet.</strong>
-        </div>
-      ) : (
-        <div className="ledger-table">
-          <div className="ledger-row ledger-head">
-            <span>Rule</span>
-            <span>Category</span>
-            <span>Source</span>
-            <span>Status</span>
+    <div className="screen-grid">
+      <section className="panel">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Memory ledger</p>
+            <h2>Saved builder rules</h2>
+            {memoryState.message && <p className="microcopy">{memoryState.message}</p>}
           </div>
-          {memories.map((memory) => (
-            <div className="ledger-row" key={memory.id}>
-              <span>{memory.rule}</span>
-              <span>{formatCategory(memory.category)}</span>
-              <span>{memory.projectName}</span>
-              <span>{memory.backboardMemoryId ? 'Saved' : formatStatus(memory.status)}</span>
-            </div>
-          ))}
+          <div className="section-actions">
+            <span className={lessonStatusClass(memoryState.status)}>
+              {memories.length} saved
+            </span>
+            <button
+              disabled={memoryState.status === 'loading'}
+              onClick={() => {
+                void onRefresh()
+              }}
+              type="button"
+            >
+              Refresh
+            </button>
+          </div>
         </div>
-      )}
-    </section>
+
+        <div className="memory-summary">
+          <div>
+            <span>Total memories</span>
+            <strong>{memories.length}</strong>
+          </div>
+          <div>
+            <span>Transcript-derived</span>
+            <strong>{transcriptCount}</strong>
+          </div>
+          <div>
+            <span>Manual captures</span>
+            <strong>{manualCount}</strong>
+          </div>
+        </div>
+
+        {memories.length === 0 ? (
+          <div className="empty-state">
+            <strong>No saved memories yet.</strong>
+          </div>
+        ) : (
+          <div className="memory-list">
+            {memories.map((memory) => (
+              <article className="memory-card" key={memory.id}>
+                <div className="memory-card-header">
+                  <div>
+                    <p className="eyebrow">{memorySourceLabel(memory)}</p>
+                    <h3>{memory.title}</h3>
+                  </div>
+                  <span className="status-pill is-good">Saved</span>
+                </div>
+                <div className="memory-meta">
+                  <span>{formatCategory(memory.category)}</span>
+                  <span>{formatConfidence(memory.confidence)}% confidence</span>
+                  <span>{memory.projectName}</span>
+                  <span>{formatDate(memory.createdAt)}</span>
+                </div>
+                <div className="rule-block">
+                  <span>Future rule</span>
+                  <strong>{memory.rule}</strong>
+                </div>
+                <div className="memory-detail-grid">
+                  <div>
+                    <span>Pattern</span>
+                    <p>{memory.problemPattern}</p>
+                  </div>
+                  <div>
+                    <span>Evidence</span>
+                    <p>{memory.evidence}</p>
+                  </div>
+                </div>
+                <code>{memory.backboardMemoryId || 'memory_pending'}</code>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
   )
 }
 
@@ -1560,8 +1555,10 @@ function toLesson(row: ApiLesson): Lesson {
     backboardMemoryId: row.backboard_memory_id,
     category: row.category,
     confidence: row.confidence,
+    createdAt: row.created_at,
     evidence: row.evidence,
     id: row.id,
+    importId: row.import_id,
     problemPattern: row.problem_pattern,
     projectName: row.project_name,
     rule: row.future_rule,
@@ -1588,6 +1585,24 @@ function formatStatus(value: string): string {
 
 function isSavedLesson(lesson: Lesson): boolean {
   return lesson.status === 'saved' || lesson.status === 'approved'
+}
+
+function isManualLesson(lesson: Lesson): boolean {
+  return !lesson.importId
+}
+
+function memorySourceLabel(lesson: Lesson): string {
+  return isManualLesson(lesson) ? 'Manual memory' : 'Transcript memory'
+}
+
+function formatDate(value: string): string {
+  if (!value) return 'Unknown date'
+
+  return new Intl.DateTimeFormat(undefined, {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  }).format(new Date(value))
 }
 
 function lessonStatusClass(status: LessonState['status']): string {

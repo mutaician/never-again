@@ -31,9 +31,11 @@ export type Project = {
 
 export type ImportRecord = {
   id: string
+  normalized_r2_key: string | null
   original_size_bytes: number | null
   project_id: string
   raw_r2_key: string
+  redacted_secret_count: number
   source_platform: string | null
   status: string
 }

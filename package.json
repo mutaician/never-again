@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && tsc -p tsconfig.functions.json && vite build",
     "d1:migrate:local": "wrangler d1 migrations apply never-again-db --local",
-    "d1:imports:local": "wrangler d1 execute never-again-db --local --command \"SELECT projects.name, imports.status AS import_status, jobs.status AS job_status, jobs.progress FROM imports JOIN projects ON projects.id = imports.project_id JOIN jobs ON jobs.import_id = imports.id ORDER BY imports.created_at DESC;\"",
+    "d1:imports:local": "wrangler d1 execute never-again-db --local --command \"SELECT projects.name, imports.status AS import_status, imports.redacted_secret_count, imports.normalized_r2_key, jobs.status AS job_status, jobs.progress FROM imports JOIN projects ON projects.id = imports.project_id JOIN jobs ON jobs.import_id = imports.id ORDER BY imports.created_at DESC;\"",
     "d1:users:local": "wrangler d1 execute never-again-db --local --command \"SELECT id, email, assistant_status, backboard_assistant_id FROM users;\"",
     "lint": "eslint .",
     "pages:dev": "wrangler pages dev dist --port 8788",

@@ -91,6 +91,7 @@ preview_bucket_name: never-again-transcripts-local
 ```
 
 Imports write raw transcripts to R2 before creating a queued job row.
+The current import flow also writes a normalized Markdown version that redacts likely secrets, preserves command blocks, and compresses obvious code blocks.
 
 ## Local Phase 3 Verification
 
@@ -182,6 +183,7 @@ After signing in:
 - The local D1 database should have one user row.
 - Refreshing the app should reuse the same row and assistant ID.
 - Submitting the import form should show `Import queued`.
+- The success message should mention normalized transcript storage and redaction count.
 
 ### 8. Check local D1 rows
 

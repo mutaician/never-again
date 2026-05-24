@@ -490,7 +490,7 @@ function ImportView({ apiActions }: { apiActions: ApiActions | null }) {
       })
 
       setImportStatus({
-        message: `Queued ${result.job.id.slice(0, 8)} for ${result.project.name}.`,
+        message: `Queued ${result.job.id.slice(0, 8)} for ${result.project.name}. Normalized transcript stored with ${result.import.redacted_secret_count} redactions.`,
         tone: 'success',
       })
     } catch (submitError) {

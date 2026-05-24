@@ -1,5 +1,6 @@
 import type { Env } from './env'
 import { ApiError } from './http'
+import { normalizeTranscript } from './normalization'
 import { createProject, getProject, type ProjectRow } from './projects'
 
 const MAX_TRANSCRIPT_BYTES = 750_000
@@ -76,11 +77,26 @@ export async function createImport(
   const jobId = crypto.randomUUID()
   const now = new Date().toISOString()
   const contentHash = await sha256(transcriptBytes)
+  const normalized = normalizeTranscript(transcript)
   const rawR2Key = `users/${userId}/projects/${project.id}/imports/${importId}/raw.txt`
+  const normalizedR2Key = `users/${userId}/projects/${project.id}/imports/${importId}/normalized.md`
 
   await env.TRANSCRIPTS_BUCKET.put(rawR2Key, transcript, {
     httpMetadata: {
       contentType: 'text/plain; charset=utf-8',
+    },
+  })
+
+  await env.TRANSCRIPTS_BUCKET.put(normalizedR2Key, normalized.text, {
+    customMetadata: {
+      compressedBlockCount: String(normalized.compressedBlockCount),
+      normalizedLineCount: String(normalized.normalizedLineCount),
+      originalLineCount: String(normalized.originalLineCount),
+      preservedCommandBlockCount: String(normalized.preservedCommandBlockCount),
+      redactedSecretCount: String(normalized.redactedSecretCount),
+    },
+    httpMetadata: {
+      contentType: 'text/markdown; charset=utf-8',
     },
   })
 
@@ -93,12 +109,14 @@ export async function createImport(
           project_id,
           source_platform,
           raw_r2_key,
+          normalized_r2_key,
           status,
           original_size_bytes,
           content_hash,
+          redacted_secret_count,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, 'normalized', ?, ?, ?, ?, ?)`,
       )
       .bind(
         importId,
@@ -106,8 +124,10 @@ export async function createImport(
         project.id,
         cleanOptional(input.sourcePlatform),
         rawR2Key,
+        normalizedR2Key,
         transcriptBytes.byteLength,
         contentHash,
+        normalized.redactedSecretCount,
         now,
         now,
       ),

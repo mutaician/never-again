@@ -197,4 +197,11 @@ After submitting an import, also run:
 pnpm d1:imports:local
 ```
 
-Do not deploy until `/api/me` reuses the same user row and the import form creates a queued job locally.
+For chunking details:
+
+```bash
+pnpm d1:chunks:local
+```
+
+New imports should move from `normalized` to `chunked`, and their job should move to `ready_for_analysis`.
+Do not deploy until `/api/me` reuses the same user row and the import form creates chunk rows locally.

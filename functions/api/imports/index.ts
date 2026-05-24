@@ -7,13 +7,18 @@ import {
   optionsResponse,
 } from '../../_shared/http'
 import { createImport } from '../../_shared/imports'
+import { processImportIntoChunks } from '../../_shared/processing'
 import { requireRequestSession } from '../../_shared/session'
 
 export const onRequestOptions: PagesFunction<Env> = async ({ env }) => {
   return optionsResponse(env)
 }
 
-export const onRequestPost: PagesFunction<Env> = async ({ env, request }) => {
+export const onRequestPost: PagesFunction<Env> = async ({
+  env,
+  request,
+  waitUntil,
+}) => {
   try {
     const session = await requireRequestSession(env, request)
     const body = (await request.json()) as {
@@ -29,6 +34,15 @@ export const onRequestPost: PagesFunction<Env> = async ({ env, request }) => {
       sourcePlatform: body.sourcePlatform,
       transcript: body.transcript || '',
     })
+
+    waitUntil(
+      processImportIntoChunks(
+        env,
+        session.user.id,
+        result.importRecord.id,
+        result.job.id,
+      ),
+    )
 
     return jsonResponse(
       env,

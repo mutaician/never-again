@@ -1,0 +1,6 @@
+AUTH0_DOMAIN=
+AUTH0_AUDIENCE=
+BACKBOARD_API_KEY=
+BACKBOARD_BASE_URL=https://app.backboard.io/api
+FRONTEND_ORIGIN=http://localhost:5173
+APP_ENV=development

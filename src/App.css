@@ -206,13 +206,20 @@ button:hover {
   background: rgba(255, 255, 255, 0.025);
 }
 
-.user-control span {
+.user-control > span:not(.status-pill) {
   max-width: 160px;
   overflow: hidden;
   color: var(--text-strong);
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.microcopy {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .user-control button {

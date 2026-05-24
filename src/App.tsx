@@ -1,11 +1,16 @@
 import { useAuth0 } from '@auth0/auth0-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import './App.css'
+import { fetchMe, hasApiAudience, type ApiSession } from './lib/api'
 
 type ViewKey = 'dashboard' | 'import' | 'review' | 'memory' | 'preflight'
 
 type AppProps = {
   authEnabled: boolean
+}
+
+type WorkspaceProps = AppProps & {
+  apiSession: ApiSession
 }
 
 type Lesson = {
@@ -66,13 +71,73 @@ const pipeline = [
   { label: 'Reduce', value: 'queued' },
 ]
 
+const apiAudienceMissingSession: ApiSession = {
+  message: 'Create an Auth0 API and set VITE_AUTH0_AUDIENCE to enable /api/me.',
+  status: 'skipped',
+  user: null,
+}
+
 function App({ authEnabled }: AppProps) {
-  if (!authEnabled) return <Workspace authEnabled={false} />
+  if (!authEnabled) {
+    return (
+      <Workspace
+        apiSession={{
+          message: 'Add VITE_AUTH0_DOMAIN and VITE_AUTH0_CLIENT_ID to enable login.',
+          status: 'skipped',
+          user: null,
+        }}
+        authEnabled={false}
+      />
+    )
+  }
+
   return <AuthenticatedWorkspace />
 }
 
 function AuthenticatedWorkspace() {
-  const { error, isAuthenticated, isLoading, loginWithRedirect } = useAuth0()
+  const { error, getAccessTokenSilently, isAuthenticated, isLoading, loginWithRedirect } =
+    useAuth0()
+  const [apiSession, setApiSession] = useState<ApiSession>({
+    message: 'Waiting for Auth0 session.',
+    status: 'loading',
+    user: null,
+  })
+
+  useEffect(() => {
+    if (!isAuthenticated || !hasApiAudience) return
+
+    let isActive = true
+
+    async function loadApiSession() {
+      setApiSession({
+        message: 'Binding Auth0 identity to Never Again.',
+        status: 'loading',
+        user: null,
+      })
+
+      const token = await getAccessTokenSilently()
+      const session = await fetchMe(token)
+
+      if (isActive) setApiSession(session)
+    }
+
+    void loadApiSession().catch((sessionError: unknown) => {
+      if (!isActive) return
+
+      setApiSession({
+        message:
+          sessionError instanceof Error
+            ? sessionError.message
+            : 'Unable to load API session.',
+        status: 'error',
+        user: null,
+      })
+    })
+
+    return () => {
+      isActive = false
+    }
+  }, [getAccessTokenSilently, isAuthenticated])
 
   if (isLoading) {
     return <AuthGate detail="Checking your Auth0 session." title="Loading workspace" />
@@ -98,10 +163,15 @@ function AuthenticatedWorkspace() {
     )
   }
 
-  return <Workspace authEnabled />
+  return (
+    <Workspace
+      apiSession={hasApiAudience ? apiSession : apiAudienceMissingSession}
+      authEnabled
+    />
+  )
 }
 
-function Workspace({ authEnabled }: AppProps) {
+function Workspace({ apiSession, authEnabled }: WorkspaceProps) {
   const [activeView, setActiveView] = useState<ViewKey>('dashboard')
 
   const savedLessons = useMemo(
@@ -137,7 +207,7 @@ function Workspace({ authEnabled }: AppProps) {
         <div className="sidebar-status">
           <p className="eyebrow">Identity binding</p>
           {authEnabled ? (
-            <AuthStatus />
+            <AuthStatus apiSession={apiSession} />
           ) : (
             <>
               <code>missing_auth_env</code>
@@ -155,7 +225,7 @@ function Workspace({ authEnabled }: AppProps) {
           </div>
           <div className="topbar-actions">
             <span className="status-pill is-good">3 lessons found</span>
-            {authEnabled && <AuthControls />}
+            {authEnabled && <AuthControls apiSession={apiSession} />}
             <button className="primary-action" onClick={() => setActiveView('import')} type="button">
               New import
             </button>
@@ -242,23 +312,36 @@ function AuthGate({
   )
 }
 
-function AuthStatus() {
+function AuthStatus({ apiSession }: { apiSession: ApiSession }) {
   const { user } = useAuth0()
+  const label =
+    apiSession.user?.backboardAssistantId ||
+    apiSession.user?.email ||
+    user?.email ||
+    user?.name ||
+    user?.sub ||
+    'authenticated_user'
 
   return (
     <>
-      <code>{user?.email || user?.name || user?.sub || 'authenticated_user'}</code>
-      <span className="status-pill is-good">Auth0 signed in</span>
+      <code>{label}</code>
+      <span className={apiStatusClass(apiSession.status)}>
+        {apiStatusLabel(apiSession.status)}
+      </span>
+      {apiSession.message && <p className="microcopy">{apiSession.message}</p>}
     </>
   )
 }
 
-function AuthControls() {
+function AuthControls({ apiSession }: { apiSession: ApiSession }) {
   const { logout, user } = useAuth0()
 
   return (
     <div className="user-control">
       <span>{user?.name || user?.email || 'Signed in'}</span>
+      <span className={apiStatusClass(apiSession.status)}>
+        {apiStatusLabel(apiSession.status)}
+      </span>
       <button
         onClick={() =>
           logout({ logoutParams: { returnTo: window.location.origin } })
@@ -269,6 +352,21 @@ function AuthControls() {
       </button>
     </div>
   )
+}
+
+function apiStatusClass(status: ApiSession['status']): string {
+  if (status === 'ready') return 'status-pill is-good'
+  if (status === 'pending' || status === 'loading') return 'status-pill is-warn'
+  if (status === 'error') return 'status-pill is-danger'
+  return 'status-pill is-muted'
+}
+
+function apiStatusLabel(status: ApiSession['status']): string {
+  if (status === 'ready') return 'Memory bound'
+  if (status === 'pending') return 'API pending'
+  if (status === 'loading') return 'API loading'
+  if (status === 'error') return 'API error'
+  return 'API skipped'
 }
 
 function renderView(activeView: ViewKey) {

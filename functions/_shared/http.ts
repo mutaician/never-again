@@ -7,6 +7,19 @@ export type ApiErrorCode =
   | 'database_not_bound'
   | 'method_not_allowed'
   | 'server_error'
+  | 'storage_not_bound'
+
+export class ApiError extends Error {
+  code: ApiErrorCode
+  status: number
+
+  constructor(status: number, code: ApiErrorCode, message: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.code = code
+  }
+}
 
 export function jsonResponse(
   env: Env,
@@ -62,4 +75,10 @@ export function configErrorResponse(env: Env, error: unknown): Response | null {
   if (!(error instanceof ConfigError)) return null
 
   return errorResponse(env, 500, 'config_error', error.message)
+}
+
+export function apiErrorResponse(env: Env, error: unknown): Response | null {
+  if (!(error instanceof ApiError)) return null
+
+  return errorResponse(env, error.status, error.code, error.message)
 }

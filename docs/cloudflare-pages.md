@@ -75,6 +75,23 @@ migrations/0001_users.sql
 
 The `/api/me` function expects the `users` table from that migration.
 
+## R2
+
+Create an R2 bucket and bind it to the Pages project with this binding name:
+
+```txt
+TRANSCRIPTS_BUCKET
+```
+
+The current config uses:
+
+```txt
+bucket_name: never-again-transcripts
+preview_bucket_name: never-again-transcripts-local
+```
+
+Imports write raw transcripts to R2 before creating a queued job row.
+
 ## Local Phase 3 Verification
 
 Use this before deploying.
@@ -164,6 +181,7 @@ After signing in:
 - The sidebar should show either a Backboard assistant ID or your user identity.
 - The local D1 database should have one user row.
 - Refreshing the app should reuse the same row and assistant ID.
+- Submitting the import form should show `Import queued`.
 
 ### 8. Check local D1 rows
 
@@ -171,4 +189,10 @@ After signing in:
 pnpm d1:users:local
 ```
 
-Do not deploy until `/api/me` creates and then reuses the same user row locally.
+After submitting an import, also run:
+
+```bash
+pnpm d1:imports:local
+```
+
+Do not deploy until `/api/me` reuses the same user row and the import form creates a queued job locally.

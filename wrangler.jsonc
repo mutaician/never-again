@@ -10,5 +10,12 @@
       "database_id": "00000000-0000-0000-0000-000000000000",
       "preview_database_id": "DB"
     }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "TRANSCRIPTS_BUCKET",
+      "bucket_name": "never-again-transcripts",
+      "preview_bucket_name": "never-again-transcripts-local"
+    }
   ]
 }

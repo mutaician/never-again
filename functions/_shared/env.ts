@@ -6,6 +6,7 @@ export type Env = {
   BACKBOARD_BASE_URL?: string
   DB?: D1Database
   FRONTEND_ORIGIN?: string
+  TRANSCRIPTS_BUCKET?: R2Bucket
 }
 
 export function getRequiredEnv(env: Env, key: keyof Env): string {

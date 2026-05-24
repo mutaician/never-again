@@ -1,7 +1,14 @@
 import { useAuth0 } from '@auth0/auth0-react'
-import { useEffect, useMemo, useState } from 'react'
+import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import './App.css'
-import { fetchMe, hasApiAudience, type ApiSession } from './lib/api'
+import {
+  createTranscriptImport,
+  fetchMe,
+  hasApiAudience,
+  type ApiSession,
+  type CreateImportInput,
+  type CreateImportResult,
+} from './lib/api'
 
 type ViewKey = 'dashboard' | 'import' | 'review' | 'memory' | 'preflight'
 
@@ -10,7 +17,12 @@ type AppProps = {
 }
 
 type WorkspaceProps = AppProps & {
+  apiActions: ApiActions | null
   apiSession: ApiSession
+}
+
+type ApiActions = {
+  createImport: (input: CreateImportInput) => Promise<CreateImportResult>
 }
 
 type Lesson = {
@@ -81,6 +93,7 @@ function App({ authEnabled }: AppProps) {
   if (!authEnabled) {
     return (
       <Workspace
+        apiActions={null}
         apiSession={{
           message: 'Add VITE_AUTH0_DOMAIN and VITE_AUTH0_CLIENT_ID to enable login.',
           status: 'skipped',
@@ -165,13 +178,23 @@ function AuthenticatedWorkspace() {
 
   return (
     <Workspace
+      apiActions={
+        hasApiAudience
+          ? {
+              createImport: async (input) => {
+                const token = await getAccessTokenSilently()
+                return createTranscriptImport(token, input)
+              },
+            }
+          : null
+      }
       apiSession={hasApiAudience ? apiSession : apiAudienceMissingSession}
       authEnabled
     />
   )
 }
 
-function Workspace({ apiSession, authEnabled }: WorkspaceProps) {
+function Workspace({ apiActions, apiSession, authEnabled }: WorkspaceProps) {
   const [activeView, setActiveView] = useState<ViewKey>('dashboard')
 
   const savedLessons = useMemo(
@@ -232,7 +255,9 @@ function Workspace({ apiSession, authEnabled }: WorkspaceProps) {
           </div>
         </header>
 
-        <section className="view-surface">{renderView(activeView)}</section>
+        <section className="view-surface">
+          {renderView(activeView, apiActions)}
+        </section>
       </main>
 
       <aside className="inspector" aria-label="Builder memory inspector">
@@ -369,8 +394,8 @@ function apiStatusLabel(status: ApiSession['status']): string {
   return 'API skipped'
 }
 
-function renderView(activeView: ViewKey) {
-  if (activeView === 'import') return <ImportView />
+function renderView(activeView: ViewKey, apiActions: ApiActions | null) {
+  if (activeView === 'import') return <ImportView apiActions={apiActions} />
   if (activeView === 'review') return <ReviewView />
   if (activeView === 'memory') return <MemoryView />
   if (activeView === 'preflight') return <PreflightView />
@@ -425,26 +450,89 @@ function DashboardView() {
   )
 }
 
-function ImportView() {
+function ImportView({ apiActions }: { apiActions: ApiActions | null }) {
+  const [projectName, setProjectName] = useState('Artemis Recovery Postmortem')
+  const [sourcePlatform, setSourcePlatform] = useState('claude-code')
+  const [transcript, setTranscript] = useState(
+    'User: I think the Artemis II simulator is getting too complex.\nAssistant: We can simplify the scene.\nUser: Next time we should have started with one launch sequence before the whole mission.',
+  )
+  const [importStatus, setImportStatus] = useState<{
+    message: string
+    tone: 'idle' | 'success' | 'error'
+  }>({
+    message: 'Ready to create a project, import, and queued analysis job.',
+    tone: 'idle',
+  })
+  const [isSubmitting, setIsSubmitting] = useState(false)
+
+  async function submitImport(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    if (!apiActions) {
+      setImportStatus({
+        message: 'API is not connected. Check VITE_AUTH0_AUDIENCE and VITE_API_BASE_URL.',
+        tone: 'error',
+      })
+      return
+    }
+
+    setIsSubmitting(true)
+    setImportStatus({
+      message: 'Writing transcript to R2 and creating queued job.',
+      tone: 'idle',
+    })
+
+    try {
+      const result = await apiActions.createImport({
+        projectName,
+        sourcePlatform,
+        transcript,
+      })
+
+      setImportStatus({
+        message: `Queued ${result.job.id.slice(0, 8)} for ${result.project.name}.`,
+        tone: 'success',
+      })
+    } catch (submitError) {
+      setImportStatus({
+        message:
+          submitError instanceof Error
+            ? submitError.message
+            : 'Unable to queue import.',
+        tone: 'error',
+      })
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
   return (
     <div className="screen-grid">
-      <section className="panel">
+      <form className="panel" onSubmit={submitImport}>
         <div className="section-heading">
           <div>
             <p className="eyebrow">Conversation import</p>
             <h2>Paste the messy build log</h2>
           </div>
-          <span className="status-pill is-muted">Mock form</span>
+          <span className={importStatusClass(importStatus.tone)}>
+            {importStatusLabel(importStatus.tone)}
+          </span>
         </div>
 
         <div className="form-grid">
           <label>
             <span>Project name</span>
-            <input defaultValue="Artemis Recovery Postmortem" />
+            <input
+              onChange={(event) => setProjectName(event.target.value)}
+              value={projectName}
+            />
           </label>
           <label>
             <span>Source</span>
-            <select defaultValue="claude-code">
+            <select
+              onChange={(event) => setSourcePlatform(event.target.value)}
+              value={sourcePlatform}
+            >
               <option value="cursor">Cursor</option>
               <option value="claude-code">Claude Code</option>
               <option value="chatgpt">ChatGPT</option>
@@ -457,20 +545,20 @@ function ImportView() {
         <label className="transcript-box">
           <span>Transcript</span>
           <textarea
-            defaultValue={
-              'User: I think the Artemis II simulator is getting too complex.\nAssistant: We can simplify the scene.\nUser: Next time we should have started with one launch sequence before the whole mission.'
-            }
+            onChange={(event) => setTranscript(event.target.value)}
+            value={transcript}
           />
         </label>
 
         <div className="form-footer">
           <span>Code blocks compressed</span>
           <span>Secrets redacted before analysis</span>
-          <button className="primary-action" type="button">
-            Queue analysis
+          <button className="primary-action" disabled={isSubmitting} type="submit">
+            {isSubmitting ? 'Queueing' : 'Queue analysis'}
           </button>
         </div>
-      </section>
+        <p className="form-message">{importStatus.message}</p>
+      </form>
 
       <section className="panel">
         <p className="eyebrow">Expected signals</p>
@@ -485,6 +573,18 @@ function ImportView() {
       </section>
     </div>
   )
+}
+
+function importStatusClass(tone: 'idle' | 'success' | 'error'): string {
+  if (tone === 'success') return 'status-pill is-good'
+  if (tone === 'error') return 'status-pill is-danger'
+  return 'status-pill is-muted'
+}
+
+function importStatusLabel(tone: 'idle' | 'success' | 'error'): string {
+  if (tone === 'success') return 'Import queued'
+  if (tone === 'error') return 'Needs attention'
+  return 'Ready'
 }
 
 function ReviewView() {

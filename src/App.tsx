@@ -1,7 +1,12 @@
+import { useAuth0 } from '@auth0/auth0-react'
 import { useMemo, useState } from 'react'
 import './App.css'
 
 type ViewKey = 'dashboard' | 'import' | 'review' | 'memory' | 'preflight'
+
+type AppProps = {
+  authEnabled: boolean
+}
 
 type Lesson = {
   title: string
@@ -61,7 +66,42 @@ const pipeline = [
   { label: 'Reduce', value: 'queued' },
 ]
 
-function App() {
+function App({ authEnabled }: AppProps) {
+  if (!authEnabled) return <Workspace authEnabled={false} />
+  return <AuthenticatedWorkspace />
+}
+
+function AuthenticatedWorkspace() {
+  const { error, isAuthenticated, isLoading, loginWithRedirect } = useAuth0()
+
+  if (isLoading) {
+    return <AuthGate detail="Checking your Auth0 session." title="Loading workspace" />
+  }
+
+  if (error) {
+    return (
+      <AuthGate
+        detail={error.message}
+        onSignIn={() => loginWithRedirect()}
+        title="Auth needs attention"
+      />
+    )
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <AuthGate
+        detail="Sign in to bind this workspace to your builder memory."
+        onSignIn={() => loginWithRedirect()}
+        title="Enter Never Again"
+      />
+    )
+  }
+
+  return <Workspace authEnabled />
+}
+
+function Workspace({ authEnabled }: AppProps) {
   const [activeView, setActiveView] = useState<ViewKey>('dashboard')
 
   const savedLessons = useMemo(
@@ -95,9 +135,15 @@ function App() {
         </nav>
 
         <div className="sidebar-status">
-          <p className="eyebrow">Assistant binding</p>
-          <code>pending_auth0_user</code>
-          <span className="status-pill is-muted">Phase 1 mock</span>
+          <p className="eyebrow">Identity binding</p>
+          {authEnabled ? (
+            <AuthStatus />
+          ) : (
+            <>
+              <code>missing_auth_env</code>
+              <span className="status-pill is-muted">Auth disabled</span>
+            </>
+          )}
         </div>
       </aside>
 
@@ -109,6 +155,7 @@ function App() {
           </div>
           <div className="topbar-actions">
             <span className="status-pill is-good">3 lessons found</span>
+            {authEnabled && <AuthControls />}
             <button className="primary-action" onClick={() => setActiveView('import')} type="button">
               New import
             </button>
@@ -151,6 +198,75 @@ function App() {
           </p>
         </div>
       </aside>
+    </div>
+  )
+}
+
+function AuthGate({
+  detail,
+  onSignIn,
+  title,
+}: {
+  detail: string
+  onSignIn?: () => Promise<void>
+  title: string
+}) {
+  return (
+    <main className="auth-gate">
+      <section className="panel auth-panel">
+        <div className="brand">
+          <div className="brand-mark">NA</div>
+          <div>
+            <p className="brand-name">Never Again</p>
+            <p className="brand-subtitle">Builder memory console</p>
+          </div>
+        </div>
+        <div>
+          <p className="eyebrow">Authentication</p>
+          <h1>{title}</h1>
+          <p>{detail}</p>
+        </div>
+        {onSignIn && (
+          <button
+            className="primary-action"
+            onClick={() => {
+              void onSignIn()
+            }}
+            type="button"
+          >
+            Sign in
+          </button>
+        )}
+      </section>
+    </main>
+  )
+}
+
+function AuthStatus() {
+  const { user } = useAuth0()
+
+  return (
+    <>
+      <code>{user?.email || user?.name || user?.sub || 'authenticated_user'}</code>
+      <span className="status-pill is-good">Auth0 signed in</span>
+    </>
+  )
+}
+
+function AuthControls() {
+  const { logout, user } = useAuth0()
+
+  return (
+    <div className="user-control">
+      <span>{user?.name || user?.email || 'Signed in'}</span>
+      <button
+        onClick={() =>
+          logout({ logoutParams: { returnTo: window.location.origin } })
+        }
+        type="button"
+      >
+        Sign out
+      </button>
     </div>
   )
 }

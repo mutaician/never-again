@@ -9,6 +9,41 @@
   background-size: 48px 48px;
 }
 
+.auth-gate {
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    var(--bg);
+  background-size: 48px 48px;
+}
+
+.auth-panel {
+  width: min(460px, 100%);
+  display: grid;
+  gap: 22px;
+}
+
+.auth-panel .brand {
+  padding-bottom: 18px;
+}
+
+.auth-panel h1 {
+  margin: 8px 0;
+  color: var(--text-strong);
+  font-size: 28px;
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+
+.auth-panel p {
+  margin: 0;
+  color: var(--text);
+}
+
 .sidebar,
 .inspector {
   position: sticky;
@@ -158,6 +193,33 @@ button:hover {
   gap: 10px;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.user-control {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding-left: 11px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.user-control span {
+  max-width: 160px;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-control button {
+  min-height: 36px;
+  border-left-color: var(--border);
+  border-radius: 0 7px 7px 0;
+  padding: 0 10px;
 }
 
 .view-surface {

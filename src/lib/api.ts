@@ -86,6 +86,10 @@ export type UpdateLessonInput = {
   title?: string
 }
 
+export type CreateManualLessonInput = UpdateLessonInput & {
+  projectName?: string
+}
+
 type MeResponse = {
   assistant: {
     created: boolean
@@ -156,6 +160,17 @@ export async function fetchLessons(
 
 export async function fetchLessonDrafts(accessToken: string): Promise<Lesson[]> {
   return fetchLessons(accessToken, 'draft')
+}
+
+export async function createManualLesson(
+  accessToken: string,
+  input: CreateManualLessonInput,
+): Promise<Lesson> {
+  const data = await apiRequest<{ lesson: Lesson }>(accessToken, '/api/lessons', {
+    body: JSON.stringify(input),
+    method: 'POST',
+  })
+  return data.lesson
 }
 
 export async function fetchImportJob(

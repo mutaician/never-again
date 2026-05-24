@@ -6,7 +6,7 @@ import {
   jsonResponse,
   optionsResponse,
 } from '../../_shared/http'
-import { listLessons } from '../../_shared/lessons'
+import { createManualLesson, listLessons } from '../../_shared/lessons'
 import { requireRequestSession } from '../../_shared/session'
 
 export const onRequestOptions: PagesFunction<Env> = async ({ env }) => {
@@ -20,6 +20,25 @@ export const onRequestGet: PagesFunction<Env> = async ({ env, request }) => {
     const lessons = await listLessons(env, session.user.id, status)
 
     return jsonResponse(env, { lessons })
+  } catch (error) {
+    return handleLessonError(env, error)
+  }
+}
+
+export const onRequestPost: PagesFunction<Env> = async ({ env, request }) => {
+  try {
+    const session = await requireRequestSession(env, request)
+    const body = (await request.json()) as {
+      category?: string | null
+      evidence?: string | null
+      futureRule?: string | null
+      problemPattern?: string | null
+      projectName?: string | null
+      title?: string | null
+    }
+    const lesson = await createManualLesson(env, session.user.id, body)
+
+    return jsonResponse(env, { lesson }, { status: 201 })
   } catch (error) {
     return handleLessonError(env, error)
   }

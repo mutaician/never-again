@@ -1,6 +1,7 @@
 import { addBackboardMemory } from './backboard'
 import type { Env } from './env'
 import { ApiError } from './http'
+import { createProject } from './projects'
 
 export type LessonRow = {
   backboard_memory_id: string | null
@@ -25,6 +26,15 @@ export type UpdateLessonInput = {
   evidence?: string | null
   futureRule?: string | null
   problemPattern?: string | null
+  title?: string | null
+}
+
+export type CreateManualLessonInput = {
+  category?: string | null
+  evidence?: string | null
+  futureRule?: string | null
+  problemPattern?: string | null
+  projectName?: string | null
   title?: string | null
 }
 
@@ -88,6 +98,63 @@ export async function getLesson(
   }
 
   return lesson
+}
+
+export async function createManualLesson(
+  env: Env,
+  userId: string,
+  input: CreateManualLessonInput,
+): Promise<LessonRow> {
+  const title = cleanOptional(input.title)
+  const problemPattern = cleanOptional(input.problemPattern)
+  const futureRule = cleanOptional(input.futureRule)
+
+  if (!title || !problemPattern || !futureRule) {
+    throw new ApiError(
+      400,
+      'bad_request',
+      'Manual lessons need a title, pattern, and future rule',
+    )
+  }
+
+  const projectName = cleanOptional(input.projectName) || 'Manual Builder Lessons'
+  const project = await resolveManualProject(env, userId, projectName)
+  const now = new Date().toISOString()
+  const id = crypto.randomUUID()
+
+  await env.DB!
+    .prepare(
+      `INSERT INTO lessons (
+        id,
+        user_id,
+        project_id,
+        import_id,
+        title,
+        category,
+        problem_pattern,
+        evidence,
+        future_rule,
+        confidence,
+        status,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, 1, 'draft', ?, ?)`,
+    )
+    .bind(
+      id,
+      userId,
+      project.id,
+      title,
+      normalizeCategory(input.category),
+      problemPattern,
+      cleanOptional(input.evidence) || 'Manually captured by the builder.',
+      futureRule,
+      now,
+      now,
+    )
+    .run()
+
+  return getLesson(env, userId, id)
 }
 
 export async function updateLesson(
@@ -206,6 +273,59 @@ export async function approveLesson(
     .run()
 
   return getLesson(env, userId, lessonId)
+}
+
+async function resolveManualProject(
+  env: Env,
+  userId: string,
+  projectName: string,
+) {
+  const existing = await env.DB!
+    .prepare(
+      `SELECT *
+       FROM projects
+       WHERE user_id = ?
+         AND name = ?
+       ORDER BY created_at ASC
+       LIMIT 1`,
+    )
+    .bind(userId, projectName)
+    .first<{
+      created_at: string
+      description: string | null
+      id: string
+      name: string
+      outcome: string | null
+      source_platform: string | null
+      updated_at: string
+      user_id: string
+    }>()
+
+  if (existing) return existing
+
+  return createProject(env, userId, {
+    description: 'Manual lessons captured when the model misses an important builder insight.',
+    name: projectName,
+    sourcePlatform: 'manual',
+  })
+}
+
+function normalizeCategory(value: string | null | undefined): string {
+  const category = cleanOptional(value)
+  const categories = new Set([
+    'scope',
+    'architecture',
+    'agent_behavior',
+    'prompting',
+    'domain_knowledge',
+    'testing',
+    'ux',
+    'tooling',
+    'deployment',
+    'unknown',
+  ])
+
+  return category && categories.has(category) ? category : 'unknown'
 }
 
 function cleanOptional(value: string | null | undefined): string | null {

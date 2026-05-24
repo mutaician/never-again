@@ -3,6 +3,7 @@ import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react
 import './App.css'
 import {
   approveLesson as approveLessonRequest,
+  createManualLesson as createManualLessonRequest,
   createTranscriptImport,
   fetchImportJob,
   fetchLessons as fetchLessonsRequest,
@@ -11,6 +12,7 @@ import {
   rejectLesson as rejectLessonRequest,
   updateLesson as updateLessonRequest,
   type ApiSession,
+  type CreateManualLessonInput,
   type CreateImportInput,
   type CreateImportResult,
   type ImportJob as ApiImportJob,
@@ -31,6 +33,7 @@ type WorkspaceProps = AppProps & {
 
 type ApiActions = {
   approveLesson: (lessonId: string) => Promise<Lesson>
+  createManualLesson: (input: CreateManualLessonInput) => Promise<Lesson>
   createImport: (input: CreateImportInput) => Promise<CreateImportResult>
   fetchJob: (jobId: string) => Promise<ApiImportJob>
   fetchLessons: (status?: string) => Promise<Lesson[]>
@@ -165,6 +168,11 @@ function AuthenticatedWorkspace() {
       approveLesson: async (lessonId) => {
         const token = await getAccessTokenSilently()
         const row = await approveLessonRequest(token, lessonId)
+        return toLesson(row)
+      },
+      createManualLesson: async (input) => {
+        const token = await getAccessTokenSilently()
+        const row = await createManualLessonRequest(token, input)
         return toLesson(row)
       },
       createImport: async (input) => {
@@ -455,6 +463,38 @@ function Workspace({ apiActions, apiSession, authEnabled }: WorkspaceProps) {
     [apiActions, refreshLessons],
   )
 
+  const handleCreateManualLesson = useCallback(
+    async (input: CreateManualLessonInput) => {
+      if (!apiActions) return
+
+      setLessonState((current) => ({
+        ...current,
+        message: 'Adding manual lesson draft.',
+        status: 'loading',
+      }))
+
+      try {
+        await apiActions.createManualLesson(input)
+        await refreshLessons()
+        setLessonState((current) => ({
+          ...current,
+          message: 'Manual lesson added. Review it before saving to memory.',
+          status: 'ready',
+        }))
+      } catch (lessonError) {
+        setLessonState((current) => ({
+          ...current,
+          message:
+            lessonError instanceof Error
+              ? lessonError.message
+              : 'Unable to add manual lesson.',
+          status: 'error',
+        }))
+      }
+    },
+    [apiActions, refreshLessons],
+  )
+
   const handleRejectLesson = useCallback(
     async (lessonId: string) => {
       if (!apiActions) return
@@ -580,6 +620,7 @@ function Workspace({ apiActions, apiSession, authEnabled }: WorkspaceProps) {
             handleImportQueued,
             refreshLessons,
             refreshMemories,
+            handleCreateManualLesson,
             handleUpdateLesson,
             handleRejectLesson,
             handleApproveLesson,
@@ -732,6 +773,7 @@ function renderView(
   onImportQueued: (result: CreateImportResult) => void,
   onRefreshLessons: () => Promise<void>,
   onRefreshMemories: () => Promise<void>,
+  onCreateManualLesson: (input: CreateManualLessonInput) => Promise<void>,
   onUpdateLesson: (lessonId: string, input: UpdateLessonInput) => Promise<void>,
   onRejectLesson: (lessonId: string) => Promise<void>,
   onApproveLesson: (lessonId: string) => Promise<void>,
@@ -746,6 +788,7 @@ function renderView(
       <ReviewView
         lessonState={lessonState}
         onApprove={onApproveLesson}
+        onCreateManualLesson={onCreateManualLesson}
         onRefresh={onRefreshLessons}
         onReject={onRejectLesson}
         onUpdate={onUpdateLesson}
@@ -961,6 +1004,7 @@ function importStatusLabel(tone: 'idle' | 'success' | 'error'): string {
 function ReviewView({
   lessonState,
   onApprove,
+  onCreateManualLesson,
   onRefresh,
   onReject,
   onUpdate,
@@ -968,6 +1012,7 @@ function ReviewView({
 }: {
   lessonState: LessonState
   onApprove: (lessonId: string) => Promise<void>
+  onCreateManualLesson: (input: CreateManualLessonInput) => Promise<void>
   onRefresh: () => Promise<void>
   onReject: (lessonId: string) => Promise<void>
   onUpdate: (lessonId: string, input: UpdateLessonInput) => Promise<void>
@@ -976,6 +1021,7 @@ function ReviewView({
   return (
     <div className="screen-grid">
       <ProcessingPanel processingState={processingState} />
+      <ManualLessonPanel onCreate={onCreateManualLesson} />
       <section className="panel">
         <div className="section-heading">
           <div>
@@ -1014,6 +1060,147 @@ function ReviewView({
         />
       </section>
     </div>
+  )
+}
+
+function ManualLessonPanel({
+  onCreate,
+}: {
+  onCreate: (input: CreateManualLessonInput) => Promise<void>
+}) {
+  const [draft, setDraft] = useState({
+    category: 'agent_behavior',
+    evidence: '',
+    futureRule: '',
+    problemPattern: '',
+    projectName: '',
+    title: '',
+  })
+  const [isOpen, setIsOpen] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+
+  async function submitManualLesson(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setIsSaving(true)
+
+    try {
+      await onCreate(draft)
+      setDraft({
+        category: 'agent_behavior',
+        evidence: '',
+        futureRule: '',
+        problemPattern: '',
+        projectName: '',
+        title: '',
+      })
+      setIsOpen(false)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <section className="panel manual-panel">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">Manual capture</p>
+          <h2>Add the lesson the model missed</h2>
+        </div>
+        <button
+          className={isOpen ? 'secondary-action' : 'primary-action'}
+          onClick={() => setIsOpen((current) => !current)}
+          type="button"
+        >
+          {isOpen ? 'Close' : 'Add manual lesson'}
+        </button>
+      </div>
+      {isOpen && (
+        <form className="manual-form" onSubmit={submitManualLesson}>
+          <div className="form-grid">
+            <label>
+              <span>Title</span>
+              <input
+                onChange={(event) =>
+                  setDraft((current) => ({ ...current, title: event.target.value }))
+                }
+                required
+                value={draft.title}
+              />
+            </label>
+            <label>
+              <span>Category</span>
+              <select
+                onChange={(event) =>
+                  setDraft((current) => ({ ...current, category: event.target.value }))
+                }
+                value={draft.category}
+              >
+                <option value="scope">Scope</option>
+                <option value="architecture">Architecture</option>
+                <option value="agent_behavior">Agent behavior</option>
+                <option value="prompting">Prompting</option>
+                <option value="domain_knowledge">Domain knowledge</option>
+                <option value="testing">Testing</option>
+                <option value="ux">UX</option>
+                <option value="tooling">Tooling</option>
+                <option value="deployment">Deployment</option>
+                <option value="unknown">Unknown</option>
+              </select>
+            </label>
+          </div>
+          <label>
+            <span>Pattern</span>
+            <textarea
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  problemPattern: event.target.value,
+                }))
+              }
+              required
+              value={draft.problemPattern}
+            />
+          </label>
+          <label>
+            <span>Future rule</span>
+            <textarea
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, futureRule: event.target.value }))
+              }
+              required
+              value={draft.futureRule}
+            />
+          </label>
+          <label>
+            <span>Evidence</span>
+            <textarea
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, evidence: event.target.value }))
+              }
+              value={draft.evidence}
+            />
+          </label>
+          <label>
+            <span>Project</span>
+            <input
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  projectName: event.target.value,
+                }))
+              }
+              value={draft.projectName}
+            />
+          </label>
+          <div className="form-footer">
+            <span>Saved as draft</span>
+            <button className="primary-action" disabled={isSaving} type="submit">
+              {isSaving ? 'Adding' : 'Add draft'}
+            </button>
+          </div>
+        </form>
+      )}
+    </section>
   )
 }
 
@@ -1304,10 +1491,16 @@ function LessonCard({
           <h3>{lesson.title}</h3>
           <p>{lesson.evidence}</p>
           {mode === 'review' && (
-            <div className="rule-block">
-              <span>Future rule</span>
-              <strong>{lesson.rule}</strong>
-            </div>
+            <>
+              <div className="rule-block">
+                <span>Pattern</span>
+                <strong>{lesson.problemPattern}</strong>
+              </div>
+              <div className="rule-block">
+                <span>Future rule</span>
+                <strong>{lesson.rule}</strong>
+              </div>
+            </>
           )}
         </>
       )}

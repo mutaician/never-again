@@ -435,6 +435,8 @@ Task:
 - A useful finding must reveal a project-independent builder pattern, such as scoping, architecture, testing, prompting, workflow, dependency choice, verification strategy, or agent control.
 - If the only lesson is "fix this specific UI/game/simulation behavior", omit it.
 - Write futureRuleCandidate as a transferable rule that could help in a different project. Avoid project nouns in the rule unless absolutely necessary.
+- Treat verification workflows as high-value signals: isolated review views, asset workbenches, test harnesses, preview pages, checklists, screenshots, staged rollouts, and asking the user to inspect generated work before integration.
+- When the agent creates a separate way for the user to verify work, extract the transferable pattern behind that collaboration.
 
 Return only strict JSON. Do not wrap it in markdown code fences.
 
@@ -479,6 +481,7 @@ Task:
 - Preserve concrete evidence and cite source chunk numbers when useful.
 - Generalize the lesson so it can apply to a completely different future project.
 - Prefer lessons about scoping, architecture, test strategy, prompt/process control, dependency feasibility, integration order, and validation workflow.
+- Strongly prefer lessons where the user learned how to verify AI-generated work: isolated workbenches, preview modes, test harnesses, review checkpoints, acceptance criteria, and "inspect before integrate" workflows.
 - Merge aggressively. Produce 3 to 6 high-signal lessons, not a long list of symptoms.
 - Produce reviewable lesson drafts only. Do not save memory.
 
@@ -492,6 +495,8 @@ Transferability gate:
 - Better lesson: "Preserve user orientation and recovery controls before adding immersive presentation layers."
 - Bad lesson: "Verify visual assets in a broken mission scene."
 - Better lesson: "Create isolated verification surfaces for complex assets before integrating them into the main experience."
+- Bad lesson: "Open /?view=assets to inspect the launch pad."
+- Better lesson: "Ask the agent to expose generated components in an isolated review surface before merging them into a complex flow."
 
 Return only strict JSON. Do not wrap it in markdown code fences.
 

@@ -290,6 +290,20 @@ button:hover {
   gap: 16px;
 }
 
+.manual-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.manual-form {
+  display: grid;
+  gap: 12px;
+}
+
+.manual-form textarea {
+  min-height: 94px;
+}
+
 .progress-track {
   height: 10px;
   overflow: hidden;

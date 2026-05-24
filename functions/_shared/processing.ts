@@ -172,9 +172,21 @@ export async function analyzeImportChunks(
     await markAnalysisStarted(env, userId, importId, job.id)
 
     const selectedChunks = chunks.slice(0, MAX_CHUNKS_PER_ANALYSIS)
+    console.info('Never Again analysis started', {
+      importId,
+      jobId,
+      selectedChunkCount: selectedChunks.length,
+      totalAnalyzableChunks: chunks.length,
+    })
 
     for (const [index, chunk] of selectedChunks.entries()) {
       await markChunkStatus(env, chunk.id, 'analyzing')
+      console.info('Never Again chunk analysis loading R2 object', {
+        chunkId: chunk.id,
+        chunkIndex: chunk.chunk_index,
+        importId,
+        jobId,
+      })
 
       const object = await env.TRANSCRIPTS_BUCKET!.get(chunk.content_r2_key)
 
@@ -183,6 +195,13 @@ export async function analyzeImportChunks(
       }
 
       const chunkText = await object.text()
+      console.info('Never Again chunk analysis calling Backboard', {
+        charCount: chunkText.length,
+        chunkId: chunk.id,
+        chunkIndex: chunk.chunk_index,
+        importId,
+        jobId,
+      })
       const analysis = await analyzeChunkWithBackboard(
         env,
         assistantId,
@@ -196,6 +215,13 @@ export async function analyzeImportChunks(
       await storeChunkFindings(env, userId, importId, chunk.id, analysis.findings)
       await markChunkStatus(env, chunk.id, 'analyzed')
       await markAnalysisProgress(env, userId, jobId, selectedChunks.length, index + 1)
+      console.info('Never Again chunk analysis completed', {
+        chunkId: chunk.id,
+        chunkIndex: chunk.chunk_index,
+        findingCount: analysis.findings.length,
+        importId,
+        jobId,
+      })
     }
 
     const now = new Date().toISOString()

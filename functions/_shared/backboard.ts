@@ -196,8 +196,16 @@ export async function analyzeChunkWithBackboard(
   const apiKey = getRequiredEnv(env, 'BACKBOARD_API_KEY')
   const baseUrl = (env.BACKBOARD_BASE_URL || 'https://app.backboard.io/api')
     .replace(/\/$/, '')
+  const url = `${baseUrl}/threads/messages`
 
-  const response = await fetch(`${baseUrl}/threads/messages`, {
+  console.info('Never Again Backboard chunk request starting', {
+    assistantId,
+    chunkIndex: context.chunkIndex,
+    projectName: context.projectName,
+    urlHost: safeHost(url),
+  })
+
+  const response = await fetch(url, {
     body: JSON.stringify(withModelConfig(env, {
       assistant_id: assistantId,
       content: chunkAnalysisPrompt(chunkText, context),
@@ -216,6 +224,13 @@ export async function analyzeChunkWithBackboard(
       'X-API-Key': apiKey,
     },
     method: 'POST',
+  })
+
+  console.info('Never Again Backboard chunk response received', {
+    chunkIndex: context.chunkIndex,
+    ok: response.ok,
+    status: response.status,
+    urlHost: safeHost(url),
   })
 
   if (!response.ok) {
@@ -969,4 +984,12 @@ function cleanOptional(value: string | null | undefined): string | null {
 
   const cleanValue = value.trim()
   return cleanValue || null
+}
+
+function safeHost(value: string): string {
+  try {
+    return new URL(value).host
+  } catch {
+    return 'invalid_url'
+  }
 }
